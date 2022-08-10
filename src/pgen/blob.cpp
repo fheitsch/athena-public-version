@@ -3,8 +3,8 @@
 // Copyright(C) 2014 James M. Stone <jmstone@princeton.edu> and other code contributors
 // Licensed under the 3-clause BSD License, see LICENSE file for details
 //========================================================================================
-//! \file coolcloud.cpp
-//  \brief Problem generator for coolcloud: precipitation
+//! \file dwarfwake.cpp
+//  \brief Problem generator for LMC wake in MW gas halo
 //
 
 // C++ headers
@@ -29,6 +29,9 @@
 #include "../fft/athena_fft.hpp"
 #include "../mesh/mesh.hpp"
 #include "../utils/utils.hpp"
+// extra headers
+#include "../hydro/srcterms/hydro_srcterms.hpp"
+
 
 #ifdef OPENMP_PARALLEL
 #include <omp.h>
@@ -40,7 +43,7 @@
 
 
 // Cooling variables. These need to be set in InitUserMeshData (restarts!!)
-Real n0, T0, gm1, grav_acc, pcool, dtcool = HUGE_NUMBER;
+Real r0, nrat, P0, n0, T0, gm1, v0, grav_acc, pcool, dtcool = HUGE_NUMBER;
 int64_t rseed; // seed for turbulence power spectrum
 AthenaArray<Real> dvturb;
 
@@ -51,6 +54,7 @@ typedef Real (*CoolingFunc_t)(const Real dens, const Real temp);
 void InitTurbulence(ParameterInput *pin, Coordinates *pcoord, Hydro *phydro);
 Real CoolingFuncShull(const Real dens, const Real temp); // heating and cooling
 Real CoolingFuncSlyz(const Real dens, const Real temp);
+Real CoolingFuncSlyzMod(const Real dens, const Real temp);
 Real RootFunc(const Real dens, const Real temp0, const Real temp1, const Real dt);
 Real BracketRoot(const Real dens, const Real temp0, const Real dt);
 Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt);
@@ -63,8 +67,12 @@ void ProjectPressureInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> 
 void ProjectPressureOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                             FaceField &b, Real time, Real dt,
                             int is, int ie, int js, int je, int ks, int ke, int ngh);
-CoolingFunc_t CoolingFunc;
-
+void InflowBoundary(MeshBlock *pmb, Coordinates *pcoord, AthenaArray<Real> &prim,
+                    FaceField &bb, Real time, Real dt,
+                    int is, int ie, int js, int je, int ks, int ke, int ngh);
+CoolingFunc_t CoolingFunc; //type declaration, a pointer to a function
+Real gravpot_LMC(const Real x1, const Real x2, const Real x3, const Real time);
+Real gravpot_darkhalo(const Real x1, const Real x2, const Real x3, const Real time);
 static void stop_this();
 
 //====================================================================================
@@ -129,6 +137,57 @@ Real CoolingFuncSlyz(const Real dens, const Real temp) {
   dedt = -dens*lambda*fac;
   return dedt;
 }
+
+//====================================================================================
+Real CoolingFuncSlyzMod(const Real dens, const Real temp) {
+  const Real fac = 2.167177868e+31;
+  Real gam, lambda, dedt;
+  if (temp < 3.0) {
+    lambda = 0.0;
+  } else if (temp < 5.0e1) {
+    lambda = 1.89059e-31*std::pow(temp, 3.0);
+  } else if (temp < 1.0e3) {
+    lambda = 4.72648e-28*std::pow(temp,1.0);
+  } else if (temp < 8.0e3) {
+    lambda = 1.18724e-25*std::pow(temp,2.0e-1);
+  } else if (temp < 3.9811e4) {
+    lambda = 4.624e-36*std::pow(temp,2.867);
+  } else if (temp < 1.0e5) {
+    lambda = 3.162e-30*std::pow(temp,1.6);
+  } else if (temp < 2.884e5) {
+    lambda = 3.162e-21*std::pow(temp,-2.0e-1);
+  } else if (temp < 4.732e5) {
+    lambda = 3.96238e-14*std::pow(temp,-1.5);
+  } else if (temp < 1.0e6) {
+    lambda = 1.21075e-1*std::pow(temp,-3.7);
+  } else if (temp < 3.0e6) {
+    lambda = 4.82e-25*std::pow(temp,0.2);
+  } else if (temp < 2.0e7) {
+    lambda = 2.44135e-26*std::pow(temp, 0.4);
+  } else {
+    lambda = 4.54493e-27*std::pow(temp, 0.5);
+  }
+  if (temp < 5e4) {
+    gam = 2e-25;
+  } else {
+    gam = 2e-25*(5e4/temp);
+  } 
+
+  dedt = (gam - dens*lambda)*fac;
+  return dedt;
+}
+//Coefficients for cooling table of the form L = a*T^b:
+//    i= 0 a=  1.89059e-31 T=  3.00000e+00 b=  3.00000e+00
+//    i= 1 a=  4.72648e-28 T=  5.00000e+01 b=  1.00000e+00
+//    i= 2 a=  1.18724e-25 T=  1.00000e+03 b=  2.00000e-01
+//    i= 3 a=  4.62400e-36 T=  8.00000e+03 b=  2.86700e+00
+//    i= 4 a=  3.16200e-30 T=  3.98110e+04 b=  1.60000e+00
+//    i= 5 a=  3.16200e-21 T=  1.00000e+05 b= -2.00000e-01
+//    i= 6 a=  3.96238e-14 T=  2.88400e+05 b= -1.50000e+00
+//    i= 7 a=  1.21075e-01 T=  4.73200e+05 b= -3.70000e+00
+//    i= 8 a=  4.82008e-25 T=  1.00000e+06 b=  2.00000e-01
+//    i= 9 a=  2.44135e-26 T=  3.00000e+06 b=  4.00000e-01
+//    i=10 a=  4.54493e-27 T=  2.00000e+07 b=  5.00000e-01
 
 //====================================================================================
 // Real RootFunc(const Real dens, const Real temp0, const Real, temp1, const Real dt)
@@ -351,28 +410,75 @@ void InitTurbulence(ParameterInput *pin, Coordinates *pcoord, Hydro *phydro) {
   return;
 }
 
+
+//========================================================================================
+//! \fn int RefinementCondition(MeshBlock *pmb)
+//  \brief EXAMPLE ONLY, need to edit.............
+//         can use primitive or conservative variables
+//========================================================================================
+int RefinementCondition(MeshBlock *pmb)
+{
+  AthenaArray<Real> &w = pmb->phydro->w;
+  Real maxeps=0.0;
+  int k=pmb->ks;
+  for(int j=pmb->js; j<=pmb->je; j++) {
+    for(int i=pmb->is; i<=pmb->ie; i++) {
+      Real epsr= (std::abs(w(IDN,k,j,i+1)-2.0*w(IDN,k,j,i)+w(IDN,k,j,i-1))
+                 +std::abs(w(IDN,k,j+1,i)-2.0*w(IDN,k,j,i)+w(IDN,k,j-1,i)))/w(IDN,k,j,i);
+      Real epsp= (std::abs(w(IEN,k,j,i+1)-2.0*w(IEN,k,j,i)+w(IEN,k,j,i-1))
+                 +std::abs(w(IEN,k,j+1,i)-2.0*w(IEN,k,j,i)+w(IEN,k,j-1,i)))/w(IEN,k,j,i);
+      Real eps = std::max(epsr, epsp);
+      maxeps = std::max(maxeps, eps);
+    }
+  }
+  if(maxeps > 0.01) return 1;    // refine cell
+  if(maxeps < 0.005) return -1;  // de-refine cell
+  return 0;                      // do nothing
+}
+
 //========================================================================================
 //! \fn void Mesh::InitUserMeshData(ParameterInput *pin)
 //  \brief
 //========================================================================================
 void Mesh::InitUserMeshData(ParameterInput *pin) {
 
-  if (!DUAL_ENERGY) {
-    std::stringstream msg;
-    msg << "[InitUserMeshData]: ieqos = 2 requires DUAL_ENERGY" << std::endl;
-    throw std::runtime_error(msg.str().c_str());
-  }
+  int icool, ipot;
 
+  //if (!DUAL_ENERGY) {
+  //  std::stringstream msg;
+  //  msg << "[InitUserMeshData]: ieqos = 2 requires DUAL_ENERGY" << std::endl;
+  //  throw std::runtime_error(msg.str().c_str());
+  //}
+  
+  icool    = pin->GetInteger("problem","icool"); // 0: none , 1: Slyz
+  ipot     = pin->GetInteger("problem","ipot"); // 0: none, 1: static dwarf potential
   gm1   = pin->GetReal("hydro","gamma")-1.0;
   pcool = pin->GetReal("problem","pcool");
-  EnrollUserExplicitSourceFunction(HeatCool);
-  EnrollUserTimeStepFunction(HeatCoolTimeStep);
-
   grav_acc = pin->GetOrAddReal("hydro","grav_acc3",0.0);
+
+  if (icool != 0) {
+    EnrollUserExplicitSourceFunction(HeatCool);
+    EnrollUserTimeStepFunction(HeatCoolTimeStep);
+  }
+   
+  if (ipot == 1) {
+    EnrollStaticGravPotFunction(gravpot_LMC);
+  }
+
+  if (ipot == 2) {
+    EnrollStaticGravPotFunction(gravpot_darkhalo);
+  } 
+ 
   if (grav_acc != 0.0) {
     EnrollUserBoundaryFunction(INNER_X3, ProjectPressureInnerX3);
     EnrollUserBoundaryFunction(OUTER_X3, ProjectPressureOuterX3);
   }
+
+  if(adaptive==true) {
+      EnrollUserRefinementCondition(RefinementCondition);
+  }
+  
+  EnrollUserBoundaryFunction(INNER_X1, InflowBoundary);
 
   return;
 }
@@ -386,7 +492,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   int iturb, iprob,icool;
-  Real x0, y0, z0, r0, nrat, dtc = HUGE_NUMBER;
+  Real x0, y0, z0, dtc = HUGE_NUMBER;
   std::stringstream msg;
   Real avg[2], my_avg[2];
 #ifdef MPI_PARALLEL
@@ -399,21 +505,22 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   icool    = pin->GetInteger("problem","icool"); // 0: Shull \& Moss, 1: Slyz
   n0       = pin->GetOrAddReal("problem","n0",1.0); // background density
   T0       = pin->GetOrAddReal("problem","T0",1.0); // background temperature
+  v0       = pin->GetOrAddReal("problem","v0",0.0); // wind x-velocity
+  r0       = pin->GetReal("problem","r0"); // cloud radius
   x0       = pin->GetOrAddReal("problem","x0",0.0); // x-center of cloud
   y0       = pin->GetOrAddReal("problem","y0",0.0); // y-center of cloud
   z0       = pin->GetOrAddReal("problem","z0",0.0); // z-center of cloud
   nrat     = pin->GetOrAddReal("problem","nrat",1.0); // amplitude of density perturbation
-  if (iprob > 0) {
-    r0       = pin->GetReal("problem","r0"); // cloud radius
-  }
 
   // Set the cooling function
   if (icool == 0) {
     CoolingFunc = CoolingFuncShull; 
   } else if (icool == 1) {
     CoolingFunc = CoolingFuncSlyz;
+  } else if (icool == 2) {
+    CoolingFunc = CoolingFuncSlyzMod;
   } else {
-    msg << "[coolcloud]: icool must have values 0 or 1. " << icool << std::endl;
+    msg << "[dwarfwake]: icool must have values 0, 1, or 2. " << icool << std::endl;
     throw std::runtime_error(msg.str().c_str());
   }
 
@@ -428,7 +535,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
       for (int j=js; j<=je; j++) {
         for (int i=is; i<=ie; i++) {
           phydro->u(IDN,k,j,i) = n0;
-          phydro->u(IM1,k,j,i) = 0.0;
+          phydro->u(IM1,k,j,i) = v0*n0;
           phydro->u(IM2,k,j,i) = 0.0;
           phydro->u(IM3,k,j,i) = 0.0;
           if (iturb == 1) {
@@ -446,71 +553,29 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     } 
   }
 
-  // periodic box with density profile and turbulent velocity field restricted to density
-  // Isothermal halo at T0 if grav_acc != 0.
+// Periodic box with spherical density perturbation
   if (iprob == 1) {
-    grav_acc = phydro->psrc->GetG3();
-    for (int l=0; l<2; l++) {
-      avg[l]    = 0.0;
-      my_avg[l] = 0.0;
-    }
     for (int k=ks; k<=ke; k++) {
-      Real z = pcoord->x3v(k);
+      Real z = pcoord->x3v(k) ;
       for (int j=js; j<=je; j++) {
         Real y = pcoord->x2v(j);
         for (int i=is; i<=ie; i++) {
           Real x = pcoord->x1v(i);
           Real r = std::sqrt(SQR(x-x0)+SQR(y-y0)+SQR(z-z0));
-          Real e = std::exp(grav_acc*z/T0);
-          phydro->u(IDN,k,j,i) = n0*e+(nrat-1.0*e)*n0*0.5*(1.0-std::tanh((r-r0)/(0.1*r0)));
-          phydro->u(IM1,k,j,i) = 0.0;
+          phydro->u(IDN,k,j,i) = n0+(nrat*n0-n0)*0.5*(1.0-std::tanh((r-r0)/(0.1*r0)));
+          phydro->u(IM1,k,j,i) = v0*n0*0.5*(1.0+std::tanh((r-r0)/(0.1*r0)));
           phydro->u(IM2,k,j,i) = 0.0;
           phydro->u(IM3,k,j,i) = 0.0;
           if (iturb == 1) {
             phydro->u(IM1,k,j,i) += dvturb(0,k,j,i)*phydro->u(IDN,k,j,i);
             phydro->u(IM2,k,j,i) += dvturb(1,k,j,i)*phydro->u(IDN,k,j,i);
             phydro->u(IM3,k,j,i) += dvturb(2,k,j,i)*phydro->u(IDN,k,j,i);
-            avg[0]               += ( SQR(dvturb(0,k,j,i))
-                                     +SQR(dvturb(1,k,j,i))
-                                     +SQR(dvturb(2,k,j,i)))
-                                   *phydro->u(IDN,k,j,i);
-            avg[1]               += 0.5*(1.0-std::tanh((r-r0)/(0.1*r0)));
           }
-          if (NSCALARS == 2) {
-            // ns=0: cloud; ns=1: ambient
-            phydro->u(NHYDRO-NSCALARS  ,k,j,i) = phydro->u(IDN,k,j,i)*0.5*(1.0-std::tanh((r-r0)/(0.1*r0)));
-            phydro->u(NHYDRO-NSCALARS+1,k,j,i) = phydro->u(IDN,k,j,i)*0.5*(1.0+std::tanh((r-r0)/(0.1*r0)));
-          }
-        }
-      }
-    }
-  
-    if (iturb == 1) {
-#ifdef MPI_PARALLEL
-      for (int l=0; l<2; l++) my_avg[l] = avg[l];
-      mpierr = MPI_Allreduce(&my_avg, &avg, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-      if (mpierr) {
-        msg << "[coolcloud]: MPI_Allreduce error = " << mpierr << std::endl;
-        throw std::runtime_error(msg.str().c_str());
-      }
-#endif
-      avg[0] /= avg[1];
-    }
-
-    for (int k=ks; k<=ke; k++) {
-      Real z = pcoord->x3v(k);
-      for (int j=js; j<=je; j++) {
-        Real y = pcoord->x2v(j);
-        for (int i=is; i<=ie; i++) {
-          Real x = pcoord->x1v(i);
-          Real r = std::sqrt(SQR(x-x0)+SQR(y-y0)+SQR(z-z0));
-          Real e = std::exp(grav_acc*z/T0);
-          phydro->u(IEN,k,j,i) =  n0*T0*e/gm1 //+0.5*(1.0+std::tanh((r-r0)/(0.1*r0)))*avg[0])/gm1 
-                                 + 0.5*( SQR(phydro->u(IM1,k,j,i))
-                                        +SQR(phydro->u(IM2,k,j,i))
-                                        +SQR(phydro->u(IM3,k,j,i)))
-                                      /phydro->u(IDN,k,j,i);
-          phydro->u(IIE,k,j,i) =  n0*T0*e/gm1; //+0.5*(1.0+std::tanh((r-r0)/(0.1*r0)))*avg[0])/gm1;
+          phydro->u(IEN,k,j,i) = n0*T0/gm1 + 0.5*( SQR(phydro->u(IM1,k,j,i))
+                                                  +SQR(phydro->u(IM2,k,j,i))
+                                                  +SQR(phydro->u(IM3,k,j,i)))
+                                                /phydro->u(IDN,k,j,i);
+          phydro->u(IIE,k,j,i) = n0*T0/gm1;     //phydro->u(IDN,k,j,i)*T0/gm1;
         }
       }
     }
@@ -535,9 +600,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   }
 #endif
   dtcool = dtc;
-  if (myid == 0) {
-    std::cout << "[coolcloud]: dtcool = " << std::scientific << std::setprecision(5) << dtcool << std::endl;
-  }
+  //if (myid == 0) {
+    //std::cout << "[coolcloud]: dtcool = " << std::scientific << std::setprecision(5) << dtcool << std::endl;
+  //}
 
 }
 
@@ -594,7 +659,7 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
       }
     }
   }
-  //fprintf(stdout,"[HeatCool]: time = %13.5e dt = %13.5e dtcool = %13.5e\n",time,dt,dtcool);
+  fprintf(stdout,"[HeatCool]: time = %13.5e dt = %13.5e dtcool = %13.5e\n",time,dt,dtcool);
   return;
 }
 
@@ -611,10 +676,44 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
   return dt*std::min(1.0,pow(dtcool/dt,pcool));
 }
 
-//----------------------------------------------------------------------------------------
+
+//========================================================================================
+//// Inflow boundary condition
+//// Inputs:
+////   pmb: pointer to MeshBlock
+////   pcoord: pointer to Coordinates
+////   is,ie,js,je,ks,ke: indices demarkating active region
+//// Outputs:
+////   prim: primitives set in ghost zones
+//========================================================================================
+
+void InflowBoundary(MeshBlock *pmb, Coordinates *pcoord, AthenaArray<Real> &prim,
+                    FaceField &bb, Real time, Real dt,
+                    int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // Set hydro variables
+  for (int k = ks; k <= ke; ++k) {
+    for (int j = js; j <= je; ++j) {
+      for (int i = is-ngh; i <= is-1; ++i) {
+        prim(IDN,k,j,i) = n0;
+        prim(IPR,k,j,i) = n0*T0;
+        prim(IVX,k,j,i) = v0;
+        prim(IVY,k,j,i) = 0.0;
+        prim(IVZ,k,j,i) = 0.0;
+        prim(IGE,k,j,i) = T0/gm1;
+      }
+    }
+  }
+  return;
+} 
+
+
+
+//========================================================================================
 //! \fn void ProjectPressureInnerX3()
 //  \brief  Pressure is integated into ghost cells to improve hydrostatic eqm
-
+//========================================================================================
+//
+//
 void ProjectPressureInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                             FaceField &b, Real time, Real dt,
                             int is, int ie, int js, int je, int ks, int ke, int ngh) {
@@ -731,5 +830,34 @@ void ProjectPressureOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> 
   }
 
   return;
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn static gravpot_MC
+//  \brief spherical DM potential of LMC, centered at (0,0,0) 
+//  ISM units
+//----------------------------------------------------------------------------------------
+static Real gravpot_darkhalo(const Real x1, const Real x2, const Real x3, const Real time){
+  Real M200 = 1e8; //solar mass
+  const Real h = 0.673; 
+  Real logc200 = (0.905 - 0.101*log10(M200/(1e12/h))); 
+  Real c200 = std::pow(10,logc200);
+  Real delta_c = (200.0/3)*std::pow(c200,3)/(log(1+c200)-c200/(1+c200));
+  const Real rho_crit = (1e-29)/(1.677e-24); // 10^29 g/cm^3 --> ISM units
+  Real rho_s = rho_crit*delta_c; //  ISM density unit
+  Real r200 = std::pow((M200/16.84)/(200.0*rho_crit*(4*M_PI/3)), 1.0/3); // ISM length unit
+  Real rs = r200/c200; // ISM length unit
+  Real r = std::sqrt(SQR(x1)+SQR(x2)+SQR(x3));
+  Real Phi = (-4*M_PI*rho_s*std::pow(rs,3)*log(1+r/rs)/r);//*0.5*(1.0-std::tanh((r-r200)/(0.1*r200)));
+  return Phi;
+}
+
+static Real gravpot_LMC(const Real x1, const Real x2, const Real x3, const Real time){
+  const Real rho_s = 5.423e-1;
+  const Real a = 3.693e2;
+  const Real r200 = 4.917e3;
+  Real r = std::sqrt(SQR(x1)+SQR(x2)+SQR(x3));
+  Real Phi = (-4*M_PI*rho_s*std::pow(a,3)*log(1+r/a)/r);//*0.5*(1.0-std::tanh((r-r200)/(0.1*r200)));
+  return Phi;
 }
 

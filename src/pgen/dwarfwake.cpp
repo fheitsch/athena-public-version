@@ -3,8 +3,8 @@
 // Copyright(C) 2014 James M. Stone <jmstone@princeton.edu> and other code contributors
 // Licensed under the 3-clause BSD License, see LICENSE file for details
 //========================================================================================
-//! \file coolcloud.cpp
-//  \brief Problem generator for coolcloud: precipitation
+//! \file dwarfwake.cpp
+//  \brief Problem generator for a dark matter sub-halo traveling through the MW gas halo
 //
 
 // C++ headers
@@ -16,6 +16,7 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <bits/stdc++.h>
 
 // Athena++ headers
 #include "../athena.hpp"
@@ -29,6 +30,9 @@
 #include "../fft/athena_fft.hpp"
 #include "../mesh/mesh.hpp"
 #include "../utils/utils.hpp"
+// extra headers
+#include "../hydro/srcterms/hydro_srcterms.hpp"
+
 
 #ifdef OPENMP_PARALLEL
 #include <omp.h>
@@ -40,17 +44,15 @@
 
 
 // Cooling variables. These need to be set in InitUserMeshData (restarts!!)
-Real n0, T0, gm1, grav_acc, pcool, dtcool = HUGE_NUMBER;
-int64_t rseed; // seed for turbulence power spectrum
-AthenaArray<Real> dvturb;
+Real n0, T0, gm1, v0, grav_acc, pcool, dtcool = HUGE_NUMBER;
 
 typedef Real (*CoolingFunc_t)(const Real dens, const Real temp);
 
 //====================================================================================
 // local functions
-void InitTurbulence(ParameterInput *pin, Coordinates *pcoord, Hydro *phydro);
 Real CoolingFuncShull(const Real dens, const Real temp); // heating and cooling
 Real CoolingFuncSlyz(const Real dens, const Real temp);
+Real CoolingFuncSlyzMod(const Real dens, const Real temp);
 Real RootFunc(const Real dens, const Real temp0, const Real temp1, const Real dt);
 Real BracketRoot(const Real dens, const Real temp0, const Real dt);
 Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt);
@@ -63,8 +65,11 @@ void ProjectPressureInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> 
 void ProjectPressureOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                             FaceField &b, Real time, Real dt,
                             int is, int ie, int js, int je, int ks, int ke, int ngh);
-CoolingFunc_t CoolingFunc;
-
+void InflowBoundary(MeshBlock *pmb, Coordinates *pcoord, AthenaArray<Real> &prim,
+                    FaceField &bb, Real time, Real dt,
+                    int is, int ie, int js, int je, int ks, int ke, int ngh);
+CoolingFunc_t CoolingFunc; //type declaration, a pointer to a function
+Real gravpot_darkhalo(const Real x1, const Real x2, const Real x3, const Real time);
 static void stop_this();
 
 //====================================================================================
@@ -131,6 +136,49 @@ Real CoolingFuncSlyz(const Real dens, const Real temp) {
 }
 
 //====================================================================================
+Real CoolingFuncSlyzMod(const Real dens, const Real temp) {
+  const Real fac = 2.167177868e+31;
+  Real gam, lambda, dedt;
+  int itemp;
+  
+  std::valarray<Real> temprange = {3.0000e+00, 5.0000e+01, 1.0000e+03, 8.0000e+03, 3.9811e+04, 4.0000e+04,
+  9.0000e+04, 1.5000e+05, 2.6500e+05, 7.0000e+05, 1.0000e+07};
+
+  std::valarray<Real> coeff = {1.89059200e-31, 4.72647999e-28, 1.18723810e-25, 4.62400000e-36,
+  3.16200000e-30, 3.16200000e-21, 2.61576294e-12, 2.61576294e-12,
+  5.08130713e-15, 3.98372334e-26, 7.94857304e-27};
+
+  std::valarray<Real> expo = { 3., 1., 0.2, 2.867, 1.6, -0.2, -2., -2., -1.5, 0.4, 0.5};
+  
+  Real lt;
+  std::valarray<Real> ltr;
+  std::valarray<Real> lc;
+
+  lt     = std::log(temp);
+  ltr    = std::log(temprange);
+  lc     = std::log(coeff);
+    
+  if (lt < ltr[0]) { // no cooling bc below lower cut-off
+    lambda = 0.0;
+  } else if (lt > ltr[10]) {
+    lambda =  std::exp(lc[10]+expo[10]*lt);
+  } else {
+    itemp = 0;
+    while (ltr[itemp] < lt) {
+      itemp = itemp+1;
+    }
+    lambda = std::exp(lc[itemp-1]+expo[itemp-1]*lt); 
+  }
+  if (temp < 5e3) {
+    gam = 2e-25;
+  } else {
+    gam = 2e-25*(5e3/temp);
+  } 
+  dedt = (gam - dens*lambda)*fac;
+  return dedt;
+}
+
+//====================================================================================
 // Real RootFunc(const Real dens, const Real temp0, const Real, temp1, const Real dt)
 // This is not the thermal equilibrium, but the implicit update for the thermal ODE
 //   dT = dt*(gamma-1)/kB * (Gamma(T)-n*Lambda(T))
@@ -174,182 +222,6 @@ Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt
   return T[2];
 }
 
-//====================================================================================
-// Real InitTurbulence()
-void InitTurbulence(ParameterInput *pin, Coordinates *pcoord, Hydro *phydro) {
-  MeshBlock* pmb = phydro->pmy_block;
-  std::stringstream msg;
-#ifdef MPI_PARALLEL
-  int  mpierr;
-#endif
-  int64_t iseed;
-  int kturblo, kturbhi, nkturb, nx1, nx2, nx3;
-  Real pturb,vturb;
-  Real x1len,x2len,x3len, vol, gvol;
-  Real vrms[3], gvrms[3], cvrms[3], gcvrms[3], vavg[3], gvavg[3], cvavg[3], gcvavg[3], vrms3, cvrms3;
-  AthenaArray<Real> phases;
-  
-  nx1     = pmb->ie-pmb->is+1;
-  nx2     = pmb->je-pmb->js+1;
-  nx3     = pmb->ke-pmb->ks+1;
-  x1len   = pin->GetReal("mesh","x1max")-pin->GetReal("mesh","x1min");
-  x2len   = pin->GetReal("mesh","x2max")-pin->GetReal("mesh","x2min");
-  x3len   = pin->GetReal("mesh","x3max")-pin->GetReal("mesh","x3min");
-  vol     = x1len*x2len*x3len;
-  kturblo = pin->GetOrAddInteger("problem","kturblo",1);
-  kturbhi = pin->GetOrAddInteger("problem","kturbhi",16);
-  pturb   = pin->GetOrAddReal("problem","pturb",-2.0);
-  vturb   = pin->GetReal("problem","vturb");
-  iseed   = (int64_t) pin->GetOrAddInteger("problem","iseed",-151);
-  nkturb  = kturbhi-kturblo+1;
-  dvturb.NewAthenaArray(3,nx3,nx2,nx1);
-  phases.NewAthenaArray(3,3,nkturb,nkturb,nkturb);
-
-  // set the phases
-  for (int c=0; c<3; c++) {
-    for (int a=0; a<3; a++) {
-      for (int k=0; k<nkturb; k++) {
-        for (int j=0; j<nkturb; j++) {
-          for (int i=0; i<nkturb; i++) {
-            phases(c,a,k,j,i) = 2.0*PI*ran2(&iseed);
-          }
-        }
-      }
-    }
-  }
-  
-  // determine mean (bulk) velocities
-  for (int c=0; c<3; c++) {
-    vavg[c]  = 0.0;
-    gvavg[c] = 0.0;
-    for (int k=pmb->ks; k<=pmb->ke; k++) {
-      Real z  = pcoord->x3v(k);
-      for (int j=pmb->js; j<=pmb->je; j++) {
-        Real y = pcoord->x2v(j);
-        for (int i=pmb->is; i<=pmb->ie; i++) {
-          Real x    = pcoord->x1v(i);
-          Real dvol = pcoord->GetCellVolume(k,j,i);
-          dvturb(c,k,j,i) = 0.0;
-          for (int kk=0; kk<nkturb; kk++) {
-            Real kz = 2.0*PI*((Real) (kk+kturblo))/x3len;
-            for (int jj=0; jj<nkturb; jj++) {
-              Real ky = 2.0*PI*((Real) (jj+kturblo))/x2len;
-              for (int ii=0; ii<nkturb; ii++) {
-                Real kx = 2.0*PI*((Real) (ii+kturblo))/x1len;
-                dvturb(c,k,j,i) +=  std::sin(kx*x+phases(c,0,kk,jj,ii))
-                                   *std::sin(ky*y+phases(c,1,kk,jj,ii))
-                                   *std::sin(kz*z+phases(c,2,kk,jj,ii))
-                                   *std::pow(std::sqrt(SQR(kx)+SQR(ky)+SQR(kz)),pturb);
-              }                
-            }
-          }
-          vavg[c] += dvturb(c,k,j,i)*dvol;
-        }
-      }
-    }
-  }
-#ifdef MPI_PARALLEL
-  mpierr = MPI_Allreduce(&vavg, &gvavg, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-  if (mpierr) {
-    msg << "[InitTurbulence]: MPI_Allreduce error = " << mpierr << std::endl;
-    throw std::runtime_error(msg.str().c_str());
-  }
-  for (int c=0; c<3; c++) vavg[c]  = gvavg[c];
-#endif // MPI_PARALLEL
-  for (int c=0; c<3; c++) vavg[c] /= vol;
-  if (Globals::my_rank == 0) {
-    std::cout << "[InitTurbulence]: "
-              << " vavg[0]=" << std::scientific << std::setprecision(5) << vavg[0] 
-              << " vavg[1]=" << std::scientific << std::setprecision(5) << vavg[1] 
-              << " vavg[2]=" << std::scientific << std::setprecision(5) << vavg[2] << std::endl; 
-  }
-
-  // amplitude of un-normalized velocity field
-  for (int c=0; c<3; c++) {
-    vrms[c]  = 0.0;
-    gvrms[c] = 0.0;
-    for (int k=pmb->ks; k<=pmb->ke; k++) {
-      for (int j=pmb->js; j<=pmb->je; j++) {
-        for (int i=pmb->is; i<=pmb->ie; i++) {
-          Real dvol  = pcoord->GetCellVolume(k,j,i);
-          vrms[c]   += SQR((dvturb(c,k,j,i)-vavg[c]))*dvol;     
-        }
-      }
-    }
-  }
-#ifdef MPI_PARALLEL
-  mpierr = MPI_Allreduce(&vrms, &gvrms, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-  if (mpierr) {
-    msg << "[InitTurbulence]: MPI_Allreduce error = " << mpierr << std::endl;
-    throw std::runtime_error(msg.str().c_str());
-  }
-  for (int c=0; c<3; c++) vrms[c]  = gvrms[c];
-#endif // MPI_PARALLEL
-  for (int c=0; c<3; c++) vrms[c] /= vol;
-  vrms3 = std::sqrt((vrms[0]+vrms[1]+vrms[2])/3.0); 
-  for (int c=0; c<3; c++) vrms[c]  = std::sqrt(vrms[c]);
-  if (Globals::my_rank == 0) {
-    std::cout << "[InitTurbulence]: "
-              << " vrms[0]=" << std::scientific << std::setprecision(5) << vrms[0]
-              << " vrms[1]=" << std::scientific << std::setprecision(5) << vrms[1]
-              << " vrms[2]=" << std::scientific << std::setprecision(5) << vrms[2] 
-              << " vrms3  =" << std::scientific << std::setprecision(5) << vrms3 << std::endl;
-  }
-
-  // normalize the amplitudes and check
-  for (int c=0; c<3; c++) {
-    cvrms[c]  = 0.0;
-    gcvrms[c] = 0.0;
-    cvavg[c]  = 0.0;
-    gcvavg[c] = 0.0;
-    for (int k=pmb->ks; k<=pmb->ke; k++) {
-      for (int j=pmb->js; j<=pmb->je; j++) {
-        for (int i=pmb->is; i<=pmb->ie; i++) {
-          Real dvol        = pcoord->GetCellVolume(k,j,i);
-          dvturb(c,k,j,i)  = (dvturb(c,k,j,i)-vavg[c])*vturb/vrms3;
-          cvavg[c]        += dvturb(c,k,j,i)*dvol;
-          cvrms[c]        += SQR(dvturb(c,k,j,i))*dvol;
-        }
-      }
-    }
-  }
-#ifdef MPI_PARALLEL
-  mpierr = MPI_Allreduce(&cvrms, &gcvrms, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-  if (mpierr) {
-    msg << "[InitTurbulence]: MPI_Allreduce error = " << mpierr << std::endl;
-    throw std::runtime_error(msg.str().c_str());
-  }
-  mpierr = MPI_Allreduce(&cvavg, &gcvavg, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-  if (mpierr) {
-    msg << "[InitTurbulence]: MPI_Allreduce error = " << mpierr << std::endl;
-    throw std::runtime_error(msg.str().c_str());
-  }
-  for (int c=0; c<3; c++) {
-    cvavg[c]  = gcvavg[c];
-    cvrms[c]  = gcvrms[c];
-  }
-#endif // MPI_PARALLEL
-  cvrms3 = std::sqrt((cvrms[0]+cvrms[1]+cvrms[2])/(3.0*vol));
-  for (int c=0; c<3; c++) {
-    cvavg[c] /= vol;
-    cvrms[c]  = std::sqrt(cvrms[c]/vol);
-  }
-
-  if (Globals::my_rank == 0) {
-    std::cout << "[InitTurbulence]: "
-              << " cvavg[0]=" << std::scientific << std::setprecision(5) << cvavg[0]
-              << " cvavg[1]=" << std::scientific << std::setprecision(5) << cvavg[1]
-              << " cvavg[2]=" << std::scientific << std::setprecision(5) << cvavg[2] << std::endl;
-    std::cout << "[InitTurbulence]: "
-              << " cvrms[0]=" << std::scientific << std::setprecision(5) << cvrms[0]
-              << " cvrms[1]=" << std::scientific << std::setprecision(5) << cvrms[1]
-              << " cvrms[2]=" << std::scientific << std::setprecision(5) << cvrms[2]
-              << " cvrms3  =" << std::scientific << std::setprecision(5) << cvrms3 << std::endl;
-  }
-  phases.DeleteAthenaArray();
-  
-  return;
-}
 
 //========================================================================================
 //! \fn void Mesh::InitUserMeshData(ParameterInput *pin)
@@ -357,21 +229,30 @@ void InitTurbulence(ParameterInput *pin, Coordinates *pcoord, Hydro *phydro) {
 //========================================================================================
 void Mesh::InitUserMeshData(ParameterInput *pin) {
 
-  if (!DUAL_ENERGY) {
-    std::stringstream msg;
-    msg << "[InitUserMeshData]: ieqos = 2 requires DUAL_ENERGY" << std::endl;
-    throw std::runtime_error(msg.str().c_str());
-  }
+  int icool, ipot;
 
+  icool    = pin->GetInteger("problem","icool"); // 0: none , 1: Slyz
+  ipot     = pin->GetInteger("problem","ipot"); // 0: none, 1: static dwarf potential
   gm1   = pin->GetReal("hydro","gamma")-1.0;
   pcool = pin->GetReal("problem","pcool");
-  EnrollUserExplicitSourceFunction(HeatCool);
-  EnrollUserTimeStepFunction(HeatCoolTimeStep);
-
   grav_acc = pin->GetOrAddReal("hydro","grav_acc3",0.0);
+
+  if (icool != 0) {
+    EnrollUserExplicitSourceFunction(HeatCool);
+    EnrollUserTimeStepFunction(HeatCoolTimeStep);
+  }
+   
+  if (ipot == 1) {
+    EnrollStaticGravPotFunction(gravpot_darkhalo);
+  }
+
   if (grav_acc != 0.0) {
     EnrollUserBoundaryFunction(INNER_X3, ProjectPressureInnerX3);
     EnrollUserBoundaryFunction(OUTER_X3, ProjectPressureOuterX3);
+  }
+  
+  if (v0 != 0.0) {
+    EnrollUserBoundaryFunction(INNER_X1, InflowBoundary);
   }
 
   return;
@@ -379,14 +260,13 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
 //========================================================================================
 //! \fn void MeshBlock::ProblemGenerator(ParameterInput *pin)
-//  \brief Setup for shell sweep-up. Assumes shell is located at center of box, with
-//  coordinates running from -L to L.
+//  \brief Setup for dwarfwake problem.
 //========================================================================================
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
-  int iturb, iprob,icool;
-  Real x0, y0, z0, r0, nrat, dtc = HUGE_NUMBER;
+  int iprob,icool;
+  Real x0, y0, z0, dtc = HUGE_NUMBER;
   std::stringstream msg;
   Real avg[2], my_avg[2];
 #ifdef MPI_PARALLEL
@@ -394,48 +274,38 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   Real my_dtc;
 #endif
 
-  iturb    = pin->GetInteger("problem","iturb"); // 0: no turbulence, 1: turbulence
   iprob    = pin->GetInteger("problem","iprob"); // 0: constant density, 1: gaussian perturbation
   icool    = pin->GetInteger("problem","icool"); // 0: Shull \& Moss, 1: Slyz
   n0       = pin->GetOrAddReal("problem","n0",1.0); // background density
   T0       = pin->GetOrAddReal("problem","T0",1.0); // background temperature
+  v0       = pin->GetOrAddReal("problem","v0",0.0); // wind x-velocity
   x0       = pin->GetOrAddReal("problem","x0",0.0); // x-center of cloud
   y0       = pin->GetOrAddReal("problem","y0",0.0); // y-center of cloud
   z0       = pin->GetOrAddReal("problem","z0",0.0); // z-center of cloud
-  nrat     = pin->GetOrAddReal("problem","nrat",1.0); // amplitude of density perturbation
-  if (iprob > 0) {
-    r0       = pin->GetReal("problem","r0"); // cloud radius
-  }
+
 
   // Set the cooling function
   if (icool == 0) {
     CoolingFunc = CoolingFuncShull; 
   } else if (icool == 1) {
     CoolingFunc = CoolingFuncSlyz;
+  } else if (icool == 2) {
+    CoolingFunc = CoolingFuncSlyzMod;
   } else {
-    msg << "[coolcloud]: icool must have values 0 or 1. " << icool << std::endl;
+    msg << "[dwarfwake]: icool must have values 0, 1, or 2. " << icool << std::endl;
     throw std::runtime_error(msg.str().c_str());
   }
 
-  // Generate the normalized velocity amplitudes 
-  if (iturb > 0) {
-    InitTurbulence(pin,pcoord,phydro);
-  }
-  
-  // Periodic box with constant density and turbulent velocity field
+  // Constant density with x-velocity wind
   if (iprob == 0) { 
     for (int k=ks; k<=ke; k++) {
       for (int j=js; j<=je; j++) {
         for (int i=is; i<=ie; i++) {
           phydro->u(IDN,k,j,i) = n0;
-          phydro->u(IM1,k,j,i) = 0.0;
+          phydro->u(IM1,k,j,i) = v0*n0;
           phydro->u(IM2,k,j,i) = 0.0;
           phydro->u(IM3,k,j,i) = 0.0;
-          if (iturb == 1) {
-            phydro->u(IM1,k,j,i) += dvturb(0,k,j,i)*phydro->u(IDN,k,j,i);
-            phydro->u(IM2,k,j,i) += dvturb(1,k,j,i)*phydro->u(IDN,k,j,i);
-            phydro->u(IM3,k,j,i) += dvturb(2,k,j,i)*phydro->u(IDN,k,j,i);
-          }
+          
           phydro->u(IEN,k,j,i) = n0*T0/gm1 + 0.5*( SQR(phydro->u(IM1,k,j,i))
                                                   +SQR(phydro->u(IM2,k,j,i))
                                                   +SQR(phydro->u(IM3,k,j,i)))
@@ -446,71 +316,27 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     } 
   }
 
-  // periodic box with density profile and turbulent velocity field restricted to density
-  // Isothermal halo at T0 if grav_acc != 0.
+// Hydrostatic density profile within a dwarf satellite DM potential
+// with a background x-velocity wind  ***EDIT THIS FUNCTION*** need tanh profile to make dwarf gas not move
   if (iprob == 1) {
-    grav_acc = phydro->psrc->GetG3();
-    for (int l=0; l<2; l++) {
-      avg[l]    = 0.0;
-      my_avg[l] = 0.0;
-    }
+    const Real a = 2.275e3; 
     for (int k=ks; k<=ke; k++) {
-      Real z = pcoord->x3v(k);
+      Real z = pcoord->x3v(k) ;
       for (int j=js; j<=je; j++) {
         Real y = pcoord->x2v(j);
         for (int i=is; i<=ie; i++) {
           Real x = pcoord->x1v(i);
           Real r = std::sqrt(SQR(x-x0)+SQR(y-y0)+SQR(z-z0));
-          Real e = std::exp(grav_acc*z/T0);
-          phydro->u(IDN,k,j,i) = n0*e+(nrat-1.0*e)*n0*0.5*(1.0-std::tanh((r-r0)/(0.1*r0)));
+          phydro->u(IDN,k,j,i) = 0.0858*std::exp(-7.448*(1-std::log(1+r/a)/(r/a)));
           phydro->u(IM1,k,j,i) = 0.0;
           phydro->u(IM2,k,j,i) = 0.0;
           phydro->u(IM3,k,j,i) = 0.0;
-          if (iturb == 1) {
-            phydro->u(IM1,k,j,i) += dvturb(0,k,j,i)*phydro->u(IDN,k,j,i);
-            phydro->u(IM2,k,j,i) += dvturb(1,k,j,i)*phydro->u(IDN,k,j,i);
-            phydro->u(IM3,k,j,i) += dvturb(2,k,j,i)*phydro->u(IDN,k,j,i);
-            avg[0]               += ( SQR(dvturb(0,k,j,i))
-                                     +SQR(dvturb(1,k,j,i))
-                                     +SQR(dvturb(2,k,j,i)))
-                                   *phydro->u(IDN,k,j,i);
-            avg[1]               += 0.5*(1.0-std::tanh((r-r0)/(0.1*r0)));
-          }
-          if (NSCALARS == 2) {
-            // ns=0: cloud; ns=1: ambient
-            phydro->u(NHYDRO-NSCALARS  ,k,j,i) = phydro->u(IDN,k,j,i)*0.5*(1.0-std::tanh((r-r0)/(0.1*r0)));
-            phydro->u(NHYDRO-NSCALARS+1,k,j,i) = phydro->u(IDN,k,j,i)*0.5*(1.0+std::tanh((r-r0)/(0.1*r0)));
-          }
-        }
-      }
-    }
-  
-    if (iturb == 1) {
-#ifdef MPI_PARALLEL
-      for (int l=0; l<2; l++) my_avg[l] = avg[l];
-      mpierr = MPI_Allreduce(&my_avg, &avg, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-      if (mpierr) {
-        msg << "[coolcloud]: MPI_Allreduce error = " << mpierr << std::endl;
-        throw std::runtime_error(msg.str().c_str());
-      }
-#endif
-      avg[0] /= avg[1];
-    }
-
-    for (int k=ks; k<=ke; k++) {
-      Real z = pcoord->x3v(k);
-      for (int j=js; j<=je; j++) {
-        Real y = pcoord->x2v(j);
-        for (int i=is; i<=ie; i++) {
-          Real x = pcoord->x1v(i);
-          Real r = std::sqrt(SQR(x-x0)+SQR(y-y0)+SQR(z-z0));
-          Real e = std::exp(grav_acc*z/T0);
-          phydro->u(IEN,k,j,i) =  n0*T0*e/gm1 //+0.5*(1.0+std::tanh((r-r0)/(0.1*r0)))*avg[0])/gm1 
-                                 + 0.5*( SQR(phydro->u(IM1,k,j,i))
-                                        +SQR(phydro->u(IM2,k,j,i))
-                                        +SQR(phydro->u(IM3,k,j,i)))
-                                      /phydro->u(IDN,k,j,i);
-          phydro->u(IIE,k,j,i) =  n0*T0*e/gm1; //+0.5*(1.0+std::tanh((r-r0)/(0.1*r0)))*avg[0])/gm1;
+         
+          phydro->u(IEN,k,j,i) = phydro->u(IDN,k,j,i)*T0/gm1 + 0.5*( SQR(phydro->u(IM1,k,j,i))
+                                                  +SQR(phydro->u(IM2,k,j,i))
+                                                  +SQR(phydro->u(IM3,k,j,i)))
+                                                /phydro->u(IDN,k,j,i);
+          phydro->u(IIE,k,j,i) = phydro->u(IDN,k,j,i)*T0/gm1;
         }
       }
     }
@@ -535,9 +361,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   }
 #endif
   dtcool = dtc;
-  if (myid == 0) {
-    std::cout << "[coolcloud]: dtcool = " << std::scientific << std::setprecision(5) << dtcool << std::endl;
-  }
+  //if (myid == 0) {
+    //std::cout << "[coolcloud]: dtcool = " << std::scientific << std::setprecision(5) << dtcool << std::endl;
+  //}
 
 }
 
@@ -571,7 +397,7 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
         Real temp0 = prim(IGE,k,j,i)*g1; // This should have gam-1, bc it's the specific internal energy
         if (temp0 <= 0.0) {
           std::stringstream msg;
-          msg << "### FATAL ERROR in coolcloud.cpp: HeatCool: temp0 <=0 for DUAL_ENERGY" << std::endl
+          msg << "### FATAL ERROR in dwarfwake.cpp: HeatCool: temp0 <=0 for DUAL_ENERGY" << std::endl
               << "    p=" << std::setw(5) << Globals::my_rank << " i=" << std::setw(5) << i << " j=" << std::setw(5) << j << " k=" << std::setw(5) << k << std::endl
               << "    temp0=" << std::scientific << std::setw(13) << std::setprecision(5) << temp0
               << "    dens=" << std::scientific << std::setw(13) << std::setprecision(5) << dens << std::endl;
@@ -589,12 +415,12 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
         //dtcool           = std::min(dtcool,temp0/(g1*fabs(dedt)+1e-60));
         //cons(IEN,k,j,i) += dener;
         //cons(IIE,k,j,i) += dener;
-        //fprintf(stdout,"[HeatCool]: i,j,k=%4i%4i%4i ien=%13.5e iie=%13.5e dener=%13.5e dtcool=%13.5e\n",i,j,k,cons(IEN,k,j,i),cons(IIE,k,j,i),dener,dtcool);
+        fprintf(stdout,"[HeatCool]: i,j,k=%4i%4i%4i ien=%13.5e iie=%13.5e dener=%13.5e dtcool=%13.5e\n",i,j,k,cons(IEN,k,j,i),cons(IIE,k,j,i),dener,dtcool);
 
       }
     }
   }
-  //fprintf(stdout,"[HeatCool]: time = %13.5e dt = %13.5e dtcool = %13.5e\n",time,dt,dtcool);
+  fprintf(stdout,"[HeatCool]: time = %13.5e dt = %13.5e dtcool = %13.5e\n",time,dt,dtcool);
   return;
 }
 
@@ -611,10 +437,44 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
   return dt*std::min(1.0,pow(dtcool/dt,pcool));
 }
 
-//----------------------------------------------------------------------------------------
+
+//========================================================================================
+//// Inflow boundary condition
+//// Inputs:
+////   pmb: pointer to MeshBlock
+////   pcoord: pointer to Coordinates
+////   is,ie,js,je,ks,ke: indices demarkating active region
+//// Outputs:
+////   prim: primitives set in ghost zones
+//========================================================================================
+
+void InflowBoundary(MeshBlock *pmb, Coordinates *pcoord, AthenaArray<Real> &prim,
+                    FaceField &bb, Real time, Real dt,
+                    int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // Set hydro variables
+  for (int k = ks; k <= ke; ++k) {
+    for (int j = js; j <= je; ++j) {
+      for (int i = is-ngh; i <= is-1; ++i) {
+        prim(IDN,k,j,i) = n0;
+        prim(IPR,k,j,i) = n0*T0;
+        prim(IVX,k,j,i) = v0;
+        prim(IVY,k,j,i) = 0.0;
+        prim(IVZ,k,j,i) = 0.0;
+        prim(IGE,k,j,i) = T0/gm1;
+      }
+    }
+  }
+  return;
+} 
+
+
+
+//========================================================================================
 //! \fn void ProjectPressureInnerX3()
 //  \brief  Pressure is integated into ghost cells to improve hydrostatic eqm
-
+//========================================================================================
+//
+//
 void ProjectPressureInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                             FaceField &b, Real time, Real dt,
                             int is, int ie, int js, int je, int ks, int ke, int ngh) {
@@ -732,4 +592,25 @@ void ProjectPressureOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> 
 
   return;
 }
+
+//----------------------------------------------------------------------------------------
+//! \fn static gravpot_darkhalo
+//  \brief spherical DM potential, centered at (0,0,0) 
+//  ISM units
+//----------------------------------------------------------------------------------------
+static Real gravpot_darkhalo(const Real x1, const Real x2, const Real x3, const Real time){
+  Real M200 = 1e10; //solar mass
+  const Real h = 0.673; 
+  Real logc200 = (0.905 - 0.101*log10(M200/(1e12/h))); 
+  Real c200 = std::pow(10,logc200);
+  Real delta_c = (200.0/3)*std::pow(c200,3)/(log(1+c200)-c200/(1+c200));
+  const Real rho_crit = (1e-29)/(1.677e-24); // 10^29 g/cm^3 --> ISM units
+  Real rho_s = rho_crit*delta_c; //  ISM density unit
+  Real r200 = std::pow((M200/16.84)/(200.0*rho_crit*(4*M_PI/3)), 1.0/3); // ISM length unit
+  Real rs = r200/c200; // ISM length unit
+  Real r = std::sqrt(SQR(x1)+SQR(x2)+SQR(x3));
+  Real Phi = (-4*M_PI*rho_s*std::pow(rs,3)*log(1+r/rs)/r);//*0.5*(1.0-std::tanh((r-r200)/(0.1*r200)));
+  return Phi;
+}
+
 
