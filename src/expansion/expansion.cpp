@@ -282,6 +282,7 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
           Real dvol3 = pc->GetFace3Area(k,j,i)*(v3f(k+1)-v3f(k))*dt; 
           newVol     = oldVol + dvol1 + dvol2 + dvol3;
       	} else if (COORDINATE_SYSTEM == "cylindrical") {
+          // these have not been updated yet to differential updates
       	  dx1 = pc->coord_vol_i_(i) + dt*(v1f(i+1)*pc->x1f(i+1)-v1f(i)*pc->x1f(i))
       				    + 0.5*pow(dt,2.0)*(pow(v1f(i+1),2.0) - pow(v1f(i),2.0));
       	  dx2 = pc->dx2f(j)+v2f(j+1)*dt - v2f(j)*dt ;
@@ -325,6 +326,12 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
 
   return;
 }
+
+//----------------------------------------------------------------------------------------
+// void Expansion::AddWallEMF()
+//  \brief: Adds the wall-emf to the total EMF to be used in ct.cpp. Copy of 
+//          calculate_corner_EMF.cpp
+
 
 //----------------------------------------------------------------------------------------
 // void Expansion::RescaleField()
@@ -497,92 +504,35 @@ void Expansion::UpdateVelData(MeshBlock *pmb ,Real time, Real dt){
   if (pmb->pmy_mesh->GridDiffEq_ != NULL) {
     //Edit each delx1f, delx2f, delx3f before source terms and editing of grid
     if (x3Move) {
-      for (int k = kl; k<=ku+1;++k){
+      for (int k = kl; k<=ku+1;++k) {
         v3f(k) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x3f(k),k,pmb->pmy_mesh->time,dt,3,pmb->pmy_mesh->GridData);
+      }
+      if (MAGNETIC_FIELDS_ENABLED) {
+        for (int k = kl; k<=ku+1;++k) {
+          v3v(k) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x3v(k),k,pmb->pmy_mesh->time,dt,3,pmb->pmy_mesh->GridData);
+        }
       }
     }
     if (x2Move) {
       for (int j = jl;j<=ju+1;++j){
         v2f(j) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x2f(j),j,pmb->pmy_mesh->time,dt,2,pmb->pmy_mesh->GridData);
       }
+      if (MAGNETIC_FIELDS_ENABLED) {
+        for (int j = jl;j<=ju+1;++j) {
+          v2v(j) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x2v(j),j,pmb->pmy_mesh->time,dt,2,pmb->pmy_mesh->GridData);
+        }
+      }
     }
     if (x1Move) {
-      for (int i = il; i<=iu+1;++i){
+      for (int i = il; i<=iu+1;++i) {
         v1f(i) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x1f(i),i,pmb->pmy_mesh->time,dt,1,pmb->pmy_mesh->GridData);
       }
-    }
-  }
-
-  // for magnetic fields, calculate volume-centered expansion velocity needed in CalculateCornerE
-  if (MAGNETIC_FIELDS_ENABLED) {
-    const bool uniform_ave_x1 = pmb->precon->uniform_limiter[0];
-    const bool uniform_ave_x2 = pmb->precon->uniform_limiter[1];
-    const bool uniform_ave_x3 = pmb->precon->uniform_limiter[2];
-
-    if (x1Move) {
-#pragma omp simd
-      for (int i=il; i<=iu; ++i) {
-        const Real& v1f_i   = v1f(i);
-        const Real& v1f_ip1 = v1f(i+1);
-        Real& vv1 = v1v(i);
-        Real lw, rw;
-        if (uniform_ave_x1 == true) {
-          lw = 0.5;
-          rw = 0.5; 
-        } else {
-          const Real& x1f_i  = pmb->pcoord->x1f(i);
-          const Real& x1f_ip = pmb->pcoord->x1f(i+1);
-          const Real& x1v_i  = pmb->pcoord->x1v(i);
-          const Real& dx1_i  = pmb->pcoord->dx1f(i);
-          lw = (x1f_ip - x1v_i)/dx1_i;
-          rw = (x1v_i  - x1f_i)/dx1_i;
+      if (MAGNETIC_FIELDS_ENABLED) {
+        for (int i = il; i<=iu;++i) {
+          v1v(i) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x1v(i),i,pmb->pmy_mesh->time,dt,1,pmb->pmy_mesh->GridData);
         }
-        vv1 = lw*v1f_i + rw*v1f_ip1;
       }
     }
-    if (x2Move) {
-#pragma omp simd
-      for (int j=jl; j<=ju; ++j) {
-        const Real& v2f_j   = v2f(j);
-        const Real& v2f_jp1 = v2f(j+1);
-        Real& vv2 = v2v(j);
-        Real lw, rw;
-        if (uniform_ave_x2 == true) {
-          lw = 0.5;
-          rw = 0.5;
-        } else {
-          const Real& x2f_j  = pmb->pcoord->x2f(j);
-          const Real& x2f_jp = pmb->pcoord->x2f(j+1);
-          const Real& x2v_j  = pmb->pcoord->x2v(j);
-          const Real& dx2_j  = pmb->pcoord->dx2f(j);
-          lw = (x2f_jp - x2v_j)/dx2_j;
-          rw = (x2v_j  - x2f_j)/dx2_j;
-        }
-        vv2 = lw*v2f_j + rw*v2f_jp1;
-      }
-    }
-    if (x3Move) {
-#pragma omp simd
-      for (int k=kl; k<=ku; ++k) {
-        const Real& v3f_k   = v3f(k);
-        const Real& v3f_kp1 = v3f(k+1);
-        Real& vv3 = v3v(k);
-        Real lw, rw;
-        if (uniform_ave_x3 == true) {
-          lw = 0.5;
-          rw = 0.5;
-        } else {
-          const Real& x3f_k  = pmb->pcoord->x3f(k);
-          const Real& x3f_kp = pmb->pcoord->x3f(k+1);
-          const Real& x3v_k  = pmb->pcoord->x3v(k);
-          const Real& dx3_k  = pmb->pcoord->dx3f(k);
-          lw = (x3f_kp - x3v_k)/dx3_k;
-          rw = (x3v_k  - x3f_k)/dx3_k;
-        }
-        vv3 = lw*v3f_k + rw*v3f_kp1;
-      }
-    }
-
   }
 
   return;

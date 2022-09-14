@@ -56,9 +56,6 @@ void Hydro::AddFluxDivergenceToAverage(AthenaArray<Real> &w, AthenaArray<Real> &
 #pragma omp simd
         for (int i=is; i<=ie; ++i) {
           dflx(n,i) = (x1area(i+1) *x1flux(n,k,j,i+1) - x1area(i)*x1flux(n,k,j,i));
-          //if ((i==256) and (n==IEN)){
-          //  std::cout <<  "x1fluxp1=" << x1flux(n,k,j,i+1) << " x1fluxi=" << x1flux(n,k,j,i)   << std::endl;
-          //}
         }
       }
 
@@ -91,10 +88,7 @@ void Hydro::AddFluxDivergenceToAverage(AthenaArray<Real> &w, AthenaArray<Real> &
       for (int n=0; n<NHYDRO; ++n) {
 #pragma omp simd
         for (int i=is; i<=ie; ++i) {
-
           u_out(n,k,j,i) -= wght*(pmb->pmy_mesh->dt)*dflx(n,i)/vol(i);
-//          if (EXPANDING_ENABLED) pmb->pex->AddWallFlux(k,j,i,n, (wght*(pmb->pmy_mesh->dt)), u_out);
-
         }
       }
     }

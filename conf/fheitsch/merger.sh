@@ -13,7 +13,7 @@ python3 configure.py\
                          --ccmd /nas/longleaf/apps-dogwood/hdf5/1.10.2/openmpi/bin/h5pcc \
                          -hdf5 \
                          --ns 3 \
-                         -de \
+                         --nghost 3 \
                          -mpi \
                          -exp
                           

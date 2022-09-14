@@ -381,15 +381,15 @@ void UpdateGridData(Mesh *pm) {
 #pragma omp simd
             for (int i=il; i<=iu; ++i) {
               Real x    = pmb->pcoord->x1v(i);
-              Real rad, cthe2;
+              Real rad, sthe2;
               if (COORDINATE_SYSTEM == "cartesian") {
                 rad   = std::sqrt(SQR(x)+SQR(y)+SQR(z));
-                cthe2 = std::pow(SQR(y/rad),strack); // cosine of polar angle
+                sthe2 = std::pow(1.0-SQR(z/rad),strack);
               } else { // this assumes spherical_polar
                 rad   = x;
-                cthe2 = std::pow(SQR(std::cos(y)),strack);
+                sthe2 = std::pow(SQR(std::sin(y)),strack);
               }
-              weight(k,j,i) *= cthe2;
+              weight(k,j,i) *= sthe2;
             }
           }
         } 
@@ -640,7 +640,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     ivexp      = pin->GetInteger("problem","ivexp"); // see UpdateGridData
     iweight    = pin->GetInteger("problem","iweight"); // see UpdateGridData
     boost      = pin->GetOrAddReal("problem","boost",1.0); // enhancement of vtrack
-    strack     = pin->GetOrAddReal("problem","strack",1.0); // focuses tracking to polar angle by cos(theta)**(2*strack)
+    strack     = pin->GetOrAddReal("problem","strack",0.0); // focuses tracking to polar angle by cos(theta)**(2*strack)
 
     // add angular weight scheme
     if (fabs(iweight) > 10) {
@@ -699,7 +699,9 @@ void OuterX1_UniformMediumCartesian(MeshBlock *pmb, Coordinates *pco, AthenaArra
       for (int i=1; i<=ngh; ++i) {
         prim(IDN,k,j,ie+i) = ambDens;
         prim(IPR,k,j,ie+i) = ambPres;  
-        if (DUAL_ENERGY) prim(IGE,k,j,ie+i) = ambPres;
+        if (DUAL_ENERGY) {
+          prim(IGE,k,j,ie+i) = ambPres;
+        }
         prim(IVX,k,j,ie+i) = 0.0;
         prim(IVY,k,j,ie+i) = 0.0;
         prim(IVZ,k,j,ie+i) = 0.0;
@@ -757,6 +759,9 @@ void OuterX1_UniformMediumSpherical(MeshBlock *pmb, Coordinates *pco, AthenaArra
       for (int i=1; i<=ngh; ++i) {
         prim(IDN,k,j,ie+i) = ambDens;
         prim(IPR,k,j,ie+i) = ambPres;
+        if (DUAL_ENERGY) {
+          prim(IGE,k,j,ie+i) = ambPres;
+        }
         prim(IVX,k,j,ie+i) = 0.0;
         prim(IVY,k,j,ie+i) = 0.0;
         prim(IVZ,k,j,ie+i) = 0.0;
@@ -822,12 +827,14 @@ void OuterX2_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh) {
   
   for (int k=ks; k<=ke; ++k) {
-    for (int i=is; i<=ie; ++i) {
+    for (int j=1; j<=ngh; ++j) {
 #pragma omp simd
-      for (int j=1; j<=ngh; ++j) {
+      for (int i=is; i<=ie; ++i) {
         prim(IDN,k,je+j,i) = ambDens;
         prim(IPR,k,je+j,i) = ambPres;  
-        if (DUAL_ENERGY) prim(IGE,k,je+j,i) = ambPres;
+        if (DUAL_ENERGY) {
+          prim(IGE,k,je+j,i) = ambPres;
+        }
         prim(IVX,k,je+j,i) = 0.0;
         prim(IVY,k,je+j,i) = 0.0;
         prim(IVZ,k,je+j,i) = 0.0;
@@ -880,13 +887,15 @@ void OuterX2_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
 void OuterX3_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh) {
   
-  for (int j=js; j<=je; ++j) {
-    for (int i=is; i<=ie; ++i) {
+  for (int k=1; k<=ngh; ++k) {
+    for (int j=js; j<=je; ++j) {
 #pragma omp simd
-      for (int k=1; k<=ngh; ++k) {
+      for (int i=is; i<=ie; ++i) {
         prim(IDN,ke+k,j,i) = ambDens;
         prim(IPR,ke+k,j,i) = ambPres;  
-        if (DUAL_ENERGY) prim(IGE,ke+k,j,i) = ambPres;
+        if (DUAL_ENERGY) {
+          prim(IGE,ke+k,j,i) = ambPres;
+        }
         prim(IVX,ke+k,j,i) = 0.0;
         prim(IVY,ke+k,j,i) = 0.0;
         prim(IVZ,ke+k,j,i) = 0.0;
@@ -945,7 +954,9 @@ void InnerX1_UniformMediumCartesian(MeshBlock *pmb, Coordinates *pco, AthenaArra
       for (int i=1; i<=ngh; ++i) {
         prim(IDN,k,j,is-i) = ambDens;
         prim(IPR,k,j,is-i) = ambPres;  
-        if (DUAL_ENERGY) prim(IGE,k,j,is-i) = ambPres;
+        if (DUAL_ENERGY) {
+          prim(IGE,k,j,is-i) = ambPres;
+        }
         prim(IVX,k,j,is-i) = 0.0;
         prim(IVY,k,j,is-i) = 0.0;
         prim(IVZ,k,j,is-i) = 0.0;
@@ -1054,7 +1065,9 @@ void InnerX2_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
       for (int i=is; i<=ie; ++i) {
         prim(IDN,k,js-j,i) = ambDens;
         prim(IPR,k,js-j,i) = ambPres;  
-        if (DUAL_ENERGY) prim(IGE,k,js-j,i) = ambPres;
+        if (DUAL_ENERGY) {
+          prim(IGE,k,js-j,i) = ambPres;
+        }
         prim(IVX,k,js-j,i) = 0.0;
         prim(IVY,k,js-j,i) = 0.0;
         prim(IVZ,k,js-j,i) = 0.0;
@@ -1114,7 +1127,9 @@ void InnerX3_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
       for (int i=is; i<=ie; ++i) {
         prim(IDN,ks-k,j,i) = ambDens;
         prim(IPR,ks-k,j,i) = ambPres;  
-        if (DUAL_ENERGY) prim(IGE,ks-k,j,i) = ambPres;
+        if (DUAL_ENERGY) {
+          prim(IGE,ks-k,j,i) = ambPres;
+        }
         prim(IVX,ks-k,j,i) = 0.0;
         prim(IVY,ks-k,j,i) = 0.0;
         prim(IVZ,ks-k,j,i) = 0.0;
@@ -1212,7 +1227,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           z   = pcoord->x3v(k);
           r   = std::sqrt(SQR(x)+SQR(y)+SQR(z));
           rad = std::sqrt(SQR(x) + SQR(y) + SQR(z));
-          thet   = std::acos(y/rad); //2D!!!
+          thet   = std::acos(z/rad); //y if 2D!!!
         } else if (COORDINATE_SYSTEM == "cylindrical") {
           x   = pcoord->x1v(i)*std::cos(pcoord->x2v(j));
           y   = pcoord->x1v(i)*std::sin(pcoord->x2v(j));
@@ -1231,8 +1246,11 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         // azimuthal tanh profiles for radial and polar ejecta
         Real ejr = 0.25*(1.0-std::tanh((thet-(3.0*pi/4.0))/dthet))*(1.0+std::tanh((thet-(pi/4.0))/dthet));
         Real ejp = 0.5*std::abs((1.0-std::tanh((thet-(3.0*pi/4.0))/dthet))-(1.0+std::tanh((thet-(pi/4.0))/dthet)));
+//        Real ejp = 1.0;
         Real densprof = ejr*drat_r + ejp*drat_b;
+//        Real densprof = ejr*(drat_r-drat_b) + ejp*drat_b;
         Real velprof = vSh_b*ejp + vSh_r*ejr;
+
  
         den += da*(densprof-1.0)*0.5*(1.0-std::tanh((rad-rout)/dr));
         v1  += velprof*0.5*(1.0-std::tanh((rad-rout)/dr))*(rad/rout);

@@ -90,7 +90,7 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
       }
 #else
       if (EXPANDING_ENABLED) {
-         // need to add grid velocity to w(IVY etc). 
+         // need to subtract grid velocity from w(IVY) etc. 
          // The EMFs in e3_x2f etc already include the wall motion via Riemann solver.
 #pragma omp simd
         for (int i=is-1; i<=ie+1; ++i) {
