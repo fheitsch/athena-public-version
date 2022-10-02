@@ -62,6 +62,10 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
   wr.InitWithShallowCopy(wr_);
   dxw.InitWithShallowCopy(dxw_);
 
+  AthenaArray<Real> &e1flux=pmb->pex->expFlux[X1DIR];
+  AthenaArray<Real> &e2flux=pmb->pex->expFlux[X2DIR];
+  AthenaArray<Real> &e3flux=pmb->pex->expFlux[X3DIR];
+
 //----------------------------------------------------------------------------------------
 // i-direction
 
@@ -103,6 +107,7 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
         Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
         w_x1f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
       }
+
     }}
   }
 

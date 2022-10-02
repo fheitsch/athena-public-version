@@ -1230,6 +1230,7 @@ void InnerX3_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // In practice, this function should *always* be replaced by a version
   // that sets the initial conditions for the problem of interest.
+  int iprob = pin->GetInteger("problem","iprob");
   Real rout = pin->GetReal("problem","radius");
   Real dr  =  pin->GetReal("problem","ramp");
   Real pa   = pin->GetReal("problem","pamb");
@@ -1270,6 +1271,88 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     // Only check legality of COORDINATE_SYSTEM once in this function
     std::cout << "### FATAL ERROR in blast.cpp ProblemGenerator" << std::endl
         << "Unrecognized COORDINATE_SYSTEM= " << COORDINATE_SYSTEM << std::endl;
+  }
+
+  if (iprob == -1) { // field loop
+    AthenaArray<Real> ax,ay,az;
+    int nx1 = (ie-is)+1 + 2*(NGHOST);
+    int nx2 = (je-js)+1 + 2*(NGHOST);
+    int nx3 = (ke-ks)+1 + 2*(NGHOST);
+    ax.NewAthenaArray(nx3,nx2,nx1);
+    ay.NewAthenaArray(nx3,nx2,nx1);
+    az.NewAthenaArray(nx3,nx2,nx1);
+    for (int k=ks; k<=ke+1; k++) {
+      for (int j=js; j<=je+1; j++) {
+        for (int i=is; i<=ie+1; i++) {
+          ax(k,j,i) = 0.0;
+          ay(k,j,i) = 0.0;
+          if ((SQR(pcoord->x1f(i)-x0) + SQR(pcoord->x2f(j)-y0)) < rout*rout) {
+            az(k,j,i) = 1e-3*(rout - std::sqrt(SQR(pcoord->x1f(i)-x0) +
+                                              SQR(pcoord->x2f(j)-y0)));
+          } else {
+            az(k,j,i) = 0.0;
+          }
+        }
+      }
+    }
+    for (int k=ks; k<=ke; k++) {
+      for (int j=js; j<=je; j++) {
+        for (int i=is; i<=ie; i++) {
+          phydro->u(IDN,k,j,i) = 1.0;
+          phydro->u(IM1,k,j,i) = 0.0;
+          phydro->u(IM2,k,j,i) = 0.0;
+          phydro->u(IM3,k,j,i) = 0.0;
+        }
+      }
+    }
+
+    // initialize interface B
+    for (int k=ks; k<=ke; k++) {
+      for (int j=js; j<=je; j++) {
+        for (int i=is; i<=ie+1; i++) {
+          pfield->b.x1f(k,j,i) = (az(k,j+1,i) - az(k,j,i))/pcoord->dx2f(j) -
+                                 (ay(k+1,j,i) - ay(k,j,i))/pcoord->dx3f(k);
+        }
+      }
+    }
+    for (int k=ks; k<=ke; k++) {
+      for (int j=js; j<=je+1; j++) {
+        for (int i=is; i<=ie; i++) {
+          pfield->b.x2f(k,j,i) = (ax(k+1,j,i) - ax(k,j,i))/pcoord->dx3f(k) -
+                                 (az(k,j,i+1) - az(k,j,i))/pcoord->dx1f(i);
+        }
+      }
+    }
+    for (int k=ks; k<=ke+1; k++) {
+      for (int j=js; j<=je; j++) {
+        for (int i=is; i<=ie; i++) {
+          pfield->b.x3f(k,j,i) = (ay(k,j,i+1) - ay(k,j,i))/pcoord->dx1f(i) -
+                                 (ax(k,j+1,i) - ax(k,j,i))/pcoord->dx2f(j);
+        }
+      }
+    }
+
+    // initialize total energy
+    if (NON_BAROTROPIC_EOS) {
+      for (int k=ks; k<=ke; k++) {
+        for (int j=js; j<=je; j++) {
+          for (int i=is; i<=ie; i++) {
+            phydro->u(IEN,k,j,i) = 1.0/gm1 +
+            0.5*(SQR(0.5*(pfield->b.x1f(k,j,i) + pfield->b.x1f(k,j,i+1))) +
+                 SQR(0.5*(pfield->b.x2f(k,j,i) + pfield->b.x2f(k,j+1,i))) +
+                 SQR(0.5*(pfield->b.x3f(k,j,i) + pfield->b.x3f(k+1,j,i)))) + (0.5)*
+            (SQR(phydro->u(IM1,k,j,i)) + SQR(phydro->u(IM2,k,j,i))
+             + SQR(phydro->u(IM3,k,j,i)))/phydro->u(IDN,k,j,i);
+          }
+        }
+      }
+    }
+
+    ax.DeleteAthenaArray();
+    ay.DeleteAthenaArray();
+    az.DeleteAthenaArray();
+
+    return;
   }
 
   // setup uniform ambient medium with spherical over-pressured region
