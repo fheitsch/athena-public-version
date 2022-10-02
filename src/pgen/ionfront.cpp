@@ -61,23 +61,16 @@ Real ambDens;
 Real ambVel;
 Real ambPres;
 Real b0, bz0, angle;
+Real alphab, nstar; // ionization parameter
 void OuterX1_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
-     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
-void OuterX2_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
-     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
-void OuterX3_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
-     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
-
-void InnerX1_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
-     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
-void InnerX2_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
-     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
-void InnerX3_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
 
 Real PowerGridX1(Real x, RegionSize rs);
 
-void ShockDetector(AthenaArray<Real> data, AthenaArray<Real> grid, int outArr[], Real eps);
+// 
+void IonizeSourceTerm(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
+                      const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
+
 
 //========================================================================================
 //! \fn void WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> gridData)
@@ -468,46 +461,6 @@ void UpdateGridData(Mesh *pm) {
   return;
 }
 
-
-
-//Harten Van Leer Shock detection algorithm Out data should be a 1 dimensional array,
-// with the same length as indata and grid. indata is the array of Real values where
-// we look for the shocks. eps is the slope magnitude limiter, i.e. if the slope is
-// above eps, then the location has a shock.
-void ShockDetector(AthenaArray<Real> data, AthenaArray<Real> grid, int outArr[], Real eps ) {
-  int n, loc;
-  Real a, b, c;
-  n = data.GetDim1();
-  AthenaArray<Real> shockData;
-  shockData.NewAthenaArray(n-1);
-  loc = 0;
-  for (int i=1; i<(n-1); ++i) {
-    a = 0;
-    b = 0;
-    a = std::abs(data(i)-data(i-1));
-    b = std::abs(data(i+1)-data(i));
-    c = a+b;
-    shockData(i-1) = SQR(a-b);
-
-    if ( c <= eps) { 
-      shockData(i-1) = 0.0;
-    } else { 
-      shockData(i-1) /= SQR(a+b);
-    }  
-  }  
-  int k=0;
-  for (int i=0; i< (n-1); ++i) {
-    if (shockData(i) >= 0.95){
-      outArr[k] = i;
-      k+=1;    
-    }
-
-  }
- 
-  shockData.DeleteAthenaArray();
-  return;
-}
-
 //========================================================================================
 //! \fn void Mesh::InitUserMeshData(ParameterInput *pin)
 //  \brief Function to initialize problem-specific data in Mesh class.  Can also be used
@@ -526,13 +479,17 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   //   for an expanding grid).
   //========================================================================================
 
-  Real x1rat;
-
   if (COORDINATE_SYSTEM != "spherical_polar") {
     std::stringstream msg;
     msg << "[ionfront.cpp]: requires spherical_polar coordinates" << std::endl;
     throw std::runtime_error(msg.str().c_str());
   }
+
+  EnrollUserExplicitSourceFunction(IonizeSourceTerm);
+  Real x1rat = pin->GetOrAddReal("mesh","x1rat",1.0);
+  nx1        = pin->GetInteger("mesh","nx1");
+  if (x1rat < 0.0)
+    EnrollUserMeshGenerator(X1DIR,PowerGridX1);
 
   if (EXPANDING_ENABLED) {
     EnrollGridDiffEq(WallVel);
@@ -541,10 +498,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     if (mesh_bcs[OUTER_X1] == GetBoundaryFlag("user")) {
       EnrollUserBoundaryFunction(OUTER_X1,OuterX1_UniformMedium);
     }
-    Real x1rat = pin->GetOrAddReal("mesh","x1rat",1.0);
-    nx1        = pin->GetInteger("mesh","nx1");
-    if (x1rat < 0.0)
-      EnrollUserMeshGenerator(X1DIR,PowerGridX1);
 
     EnrollCalcGridData(UpdateGridData);
     ttrack.NewAthenaArray(maxntrack); // for position tracking
@@ -567,10 +520,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     if (ivexp == 0) {
       vtrack0 = pin->GetReal("problem","vtrack0"); // constant tracking velocity for test purposes
     }
-
-    Real rout  = pin->GetReal("problem","radius");
-    Real rin   = rout - pin->GetOrAddReal("problem","ramp",0.0);
-    Real vs    = pin->GetOrAddReal("problem","vel",0.0);
 
     GridData(0) = mesh_size.x1min;
     GridData(1) = 1; 
@@ -601,9 +550,7 @@ void OuterX1_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
         prim(IVX,k,j,ie+i) = 0.0;
         prim(IVY,k,j,ie+i) = 0.0;
         prim(IVZ,k,j,ie+i) = 0.0;
-        prim(IS0,k,j,ie+i) = 1.0;
-        prim(IS1,k,j,ie+i) = 0.0;
-        prim(IS2,k,j,ie+i) = 0.0;
+        prim(IS0,k,j,ie+i) = 0.0; // ionization degree 
       }
     }
   }
@@ -652,106 +599,28 @@ void OuterX1_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
 }
 
 //========================================================================================
-//! \fn void InnerX1_UniformMedium(MeshBlock *pmb, Coordinates *pco, 
-//                                 AthenaArray<Real> &prim,FaceField &b, Real time,
-//                                 Real dt, int is, int ie, int js, int je,
-//                                 int ks, int ke, int ngh) {
-//  \brief Function for inner boundary being a uniform medium with density, velocity,
-//   and pressure given by the global variables listed at the beginning of the file.
-//   NEEDS TO BE ADAPTED.
-//========================================================================================
-
-void InnerX1_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
-     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh) {
-  
-  for (int k=ks; k<=ke; ++k) {
-    for (int j=js; j<=je; ++j) {
-#pragma omp simd
-      for (int i=1; i<=ngh; ++i) {
-        prim(IDN,k,j,is-i) = ambDens;
-        prim(IPR,k,j,is-i) = ambPres;  
-        prim(IVX,k,j,is-i) = 0.0;
-        prim(IVY,k,j,is-i) = 0.0;
-        prim(IVZ,k,j,is-i) = 0.0;
-        prim(IS0,k,j,is-i) = 1.0;
-        prim(IS1,k,j,is-i) = 0.0;
-        prim(IS2,k,j,is-i) = 0.0;
-      }
-    }
-  }
-
-  if (MAGNETIC_FIELDS_ENABLED) {
-    Real theta, phi;
-    for (int k=ks; k<=ke; ++k) {
-      phi = pco->x3v(k);
-      for (int j=js; j<=je; ++j) {
-        theta = pco->x2v(j);
-#pragma omp simd
-        for (int i=1; i<=ngh; ++i) {
-          b.x1f(k,j,is-i) = b0 * std::abs(std::sin(theta))
-                               * (   std::cos(angle) * std::cos(phi) 
-                                   + std::sin(angle) * std::sin(phi));
-        }
-      }
-    }
-    for (int k=ks; k<=ke; ++k) {
-      phi = pco->x3v(k);
-      for (int j=js; j<=je+1; ++j) {
-        theta = pco->x2v(j);
-#pragma omp simd
-        for (int i=1; i<=ngh; ++i) {
-          b.x2f(k,j,is-i) = b0 * std::cos(theta)
-                               * (   std::cos(angle) * std::cos(phi) 
-                                   + std::sin(angle) * std::sin(phi));
-          if (std::sin(theta) < 0.0)
-            b.x2f(k,j,is-i) *= -1.0;
-        }
-      }
-    }
-    for (int k=ks; k<=ke+1; ++k) {
-      phi = pco->x3v(k);
-      for (int j=js; j<=je; ++j) {
-#pragma omp simd
-        for (int i=1; i<=ngh; ++i) {
-          b.x3f(k,j,is-i) = b0 * (   std::sin(angle) * std::cos(phi) 
-                                   - std::cos(angle) * std::sin(phi));
-        }
-      }
-    }
-  }
-  return;
-
-}
-
-//========================================================================================
 //! \fn Real PowerGridX1(Real x, RegionSize rs)
-//  \brief Generates grid following r_i = r_0*(1+delta)**i
+//  \brief Generates grid following r_i = r_0*(rmax/rmin)**x, with 0<=x<=1
 //========================================================================================
 Real PowerGridX1(Real x, RegionSize rs) {
-  Real delta = pow((rs.x1max/rs.x1min),1.0/((Real)nx1))-1.0;
-  Real r     = rs.x1min*pow((1.0+delta),x*((Real)nx1));
+  Real delta = rs.x1max/rs.x1min;
+  Real r     = rs.x1min*pow(delta,x);
   return r;
 }
 
 //========================================================================================
 //! \fn void MeshBlock::ProblemGenerator(ParameterInput *pin)
 //  \brief Should be used to set initial conditions.
+//    Here: sets the initial condition for ionization front in 1D. Ionization 
+//    source is assumed to be located beyond the inner (radial) boundary. No attenuation
+//    until grid starts.
 //========================================================================================
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
-  // In practice, this function should *always* be replaced by a version
-  // that sets the initial conditions for the problem of interest.
-  Real rout = pin->GetReal("problem","radius");
-  Real dr  =  pin->GetReal("problem","ramp"); //do we want identical ramps?
-  Real dthet= pin->GetReal("problem","dthet"); // transition in theta to prevent spikes in temperature (used to be 0.02)
-  Real pa   = pin->GetReal("problem","pamb");
-  Real da   = pin->GetReal("problem","damb");
-  Real prat_r = pin->GetReal("problem","prat1"); //red
-  Real drat_r = pin->GetReal("problem","drat1");
-  Real prat_b = pin->GetReal("problem","prat2"); //blue
-  Real drat_b = pin->GetReal("problem","drat2");
-  Real vSh_r   = pin->GetReal("problem","vel1");
-  Real vSh_b   = pin->GetReal("problem","vel2");
+  Real pa     = pin->GetReal("problem","pamb");
+  Real da     = pin->GetReal("problem","damb");
+  alphab      = pin->GetReal("problem","alphab"); //recombination rate
+  nstar       = pin->GetReal("problem","nstar");  // ionizing photon rate 
   if (MAGNETIC_FIELDS_ENABLED) {
     b0 = pin->GetReal("problem","b0");
     bz0= pin->GetOrAddReal("problem","bz0",0.0);
@@ -759,83 +628,33 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     if (COORDINATE_SYSTEM == "spherical_polar")
       bz0 = 0.0;
   }
-  Real gamma = peos->GetGamma(); //Look into all gamma uses and see if we can have two?
+  Real gamma = peos->GetGamma(); 
   Real gm1 = gamma - 1.0;
-  Real pi = 4.0*atan(1.0);
  
   if (Globals::my_rank==0) {
     fprintf(stdout,"IDN=%2i IVX=%2i IVY=%2i IVZ=%2i IPR=%2i IBY=%2i IBZ=%2i NHYDRO-SCALARS=%2i NHYDRO=%2i NWAVE=%2i\n",IDN,IVX,IVY,IVZ,IPR,IBY,IBZ,NHYDRO-NSCALARS,NHYDRO,NWAVE);
-    fprintf(stdout,"[ProblemGenerator]: iweight = %2i iequat = %2i\n",iweight,iequat);
   }
 
   // setup uniform ambient medium with spherical over-pressured region
   for (int k=ks; k<=ke; k++) {
     for (int j=js; j<=je; j++) {
       for (int i=is; i<=ie; i++) {
-        Real rad, r, x, y, z, thet;
-        if (COORDINATE_SYSTEM == "cartesian") {
-          x   = pcoord->x1v(i);
-          y   = pcoord->x2v(j);
-          z   = pcoord->x3v(k);
-          r   = std::sqrt(SQR(x)+SQR(y)+SQR(z));
-          rad = std::sqrt(SQR(x) + SQR(y) + SQR(z));
-          thet   = std::acos(y/rad); //2D!!!
-        } else if (COORDINATE_SYSTEM == "cylindrical") {
-          x   = pcoord->x1v(i)*std::cos(pcoord->x2v(j));
-          y   = pcoord->x1v(i)*std::sin(pcoord->x2v(j));
-          z   = pcoord->x3v(k);
-          rad = std::sqrt(SQR(x) + SQR(y) + SQR(z));
-          thet= std::acos(z/rad);
-        } else { // if (COORDINATE_SYSTEM == "spherical_polar")
-          rad = pcoord->x1v(i);
-          thet= pcoord->x2v(j);
-        }
+        Real rad;
+        rad = pcoord->x1v(i);
         Real den = da;
-        Real v1  = 0.0;
-
-        //fprintf(stdout,"i=%4i,j=%4i,k=%4i,x=%13.4e,y=%13.4e,z=%13.4e,thet=%13.4e\n",i,j,k,x,y,z,thet);
-
-        // azimuthal tanh profiles for radial and polar ejecta
-        Real ejr = 0.25*(1.0-std::tanh((thet-(3.0*pi/4.0))/dthet))*(1.0+std::tanh((thet-(pi/4.0))/dthet));
-        Real ejp = 0.5*std::abs((1.0-std::tanh((thet-(3.0*pi/4.0))/dthet))-(1.0+std::tanh((thet-(pi/4.0))/dthet)));
-        Real densprof = ejr*drat_r + ejp*drat_b;
-        Real velprof = vSh_b*ejp + vSh_r*ejr;
- 
-        den += da*(densprof-1.0)*0.5*(1.0-std::tanh((rad-rout)/dr));
-        v1  += velprof*0.5*(1.0-std::tanh((rad-rout)/dr))*(rad/rout);
-
         phydro->u(IDN,k,j,i) = den;
-        if (COORDINATE_SYSTEM == "cartesian") {
-          phydro->u(IM1,k,j,i) = den*v1*x/r;
-          phydro->u(IM2,k,j,i) = den*v1*y/r;
-          phydro->u(IM3,k,j,i) = den*v1*z/r;
-        } else if (COORDINATE_SYSTEM == "cylindrical") {
-          phydro->u(IM1,k,j,i) = den*v1;
-          phydro->u(IM2,k,j,i) = 0.0;
-          phydro->u(IM3,k,j,i) = 0.0;
-        } else if (COORDINATE_SYSTEM == "spherical_polar") {
-          phydro->u(IM1,k,j,i) = den*v1;
-          phydro->u(IM2,k,j,i) = 0.0;
-          phydro->u(IM3,k,j,i) = 0.0;
-        }
+        phydro->u(IM1,k,j,i) = 0.0;
+        phydro->u(IM2,k,j,i) = 0.0;
+        phydro->u(IM3,k,j,i) = 0.0;
         if (NON_BAROTROPIC_EOS) {
           Real pres = pa;
-          Real presprof = ejr*prat_r + ejp*prat_b;       
-          pres += pa*(presprof-1.0)*0.5*(1.0-std::tanh((rad-rout)/dr));
-          phydro->u(IEN,k,j,i) = 0.5*den*SQR(v1)+pres/gm1;
+          phydro->u(IEN,k,j,i) = pres/gm1;
           if (DUAL_ENERGY) {
             phydro->u(IIE,k,j,i) = pres/gm1;
           }
         }
-
-        // make these smooth transitions. Also make sure to set densities, not colors here.
-        phydro->u(IS0,k,j,i) = da*0.5*(1.0+std::tanh((rad-rout)/dr)); 
-        phydro->u(IS1,k,j,i) = ejr*drat_r*da*0.5*(1.0-std::tanh((rad-rout)/dr));
-        phydro->u(IS2,k,j,i) = ejp*drat_b*da*0.5*(1.0-std::tanh((rad-rout)/dr));
-
-      //fprintf(stdout,"dens=%13.5e, energy=%13.5e\n",phydro->u(IDN,k,j,i),phydro->u(IEN,k,j,i));
-      //fprintf(stdout,"thet=%13.5e, rad=%13.5e, amb=%13.3e, rej=%13.3e, pej=%13.3e\n",thet,rad,phydro->u(IS0,k,j,i),phydro->u(IS1,k,j,i),phydro->u(IS2,k,j,i));
- 
+        // ionization degree
+        phydro->u(IS0,k,j,i) = 0.0;
       }
     }
   }
@@ -844,51 +663,31 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     for (int k = ks; k <= ke; ++k) {
       for (int j = js; j <= je; ++j) {
         for (int i = is; i <= ie+1; ++i) {
-          if (COORDINATE_SYSTEM == "cartesian") {
-            pfield->b.x1f(k,j,i) = b0 * std::cos(angle);
-          } else if (COORDINATE_SYSTEM == "cylindrical") {
-            Real phi = pcoord->x2v(j);
-            pfield->b.x1f(k,j,i) =
-                b0 * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
-          } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            Real theta = pcoord->x2v(j);
-            Real phi = pcoord->x3v(k);
-            pfield->b.x1f(k,j,i) = b0 * std::abs(std::sin(theta))
-                * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
-          }
+          Real theta = pcoord->x2v(j);
+          Real phi = pcoord->x3v(k);
+          pfield->b.x1f(k,j,i) = b0 * std::abs(std::sin(theta))
+              * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
         }
       }
     }
     for (int k = ks; k <= ke; ++k) {
       for (int j = js; j <= je+1; ++j) {
         for (int i = is; i <= ie; ++i) {
-          if (COORDINATE_SYSTEM == "cartesian") {
-            pfield->b.x2f(k,j,i) = b0 * std::sin(angle);
-          } else if (COORDINATE_SYSTEM == "cylindrical") {
-            Real phi = pcoord->x2v(j);
-            pfield->b.x2f(k,j,i) =
-                b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
-          } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            Real theta = pcoord->x2v(j);
-            Real phi = pcoord->x3v(k);
-            pfield->b.x2f(k,j,i) = b0 * std::cos(theta)
-                * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
-            if (std::sin(theta) < 0.0)
-              pfield->b.x2f(k,j,i) *= -1.0;
-          }
+          Real theta = pcoord->x2v(j);
+          Real phi = pcoord->x3v(k);
+          pfield->b.x2f(k,j,i) = b0 * std::cos(theta)
+              * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
+          if (std::sin(theta) < 0.0)
+            pfield->b.x2f(k,j,i) *= -1.0;
         }
       }
     }
     for (int k = ks; k <= ke+1; ++k) {
       for (int j = js; j <= je; ++j) {
         for (int i = is; i <= ie; ++i) {
-          if (COORDINATE_SYSTEM == "cartesian" || COORDINATE_SYSTEM == "cylindrical") {
-            pfield->b.x3f(k,j,i) = bz0;
-          } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            Real phi = pcoord->x3v(k);
-            pfield->b.x3f(k,j,i) =
-                b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
-          }
+          Real phi = pcoord->x3v(k);
+          pfield->b.x3f(k,j,i) =
+              b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
         }
       }
     }
@@ -1057,6 +856,19 @@ void Mesh::UserWorkInLoop(void) {
     std::cout << "[UserWorkInLoop]: eint < 0" << std::endl;
     stop_this();
   }
+
+  return;
+}
+
+//========================================================================================
+//! \fn void IonizeSourceTerm(...)
+//  \brief Ionization Source Term
+//========================================================================================
+
+void IonizeSourceTerm(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
+                      const AthenaArray<Real> &bcc, AthenaArray<Real> &cons) {
+
+  int is=pmb->is, ie=pmb->ie, js=pmb->js, je=pmb->je, ks=pmb->ks, ke=pmb->ke; 
 
   return;
 }
