@@ -1230,7 +1230,7 @@ void InnerX3_UniformMedium(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // In practice, this function should *always* be replaced by a version
   // that sets the initial conditions for the problem of interest.
-  int iprob = pin->GetInteger("problem","iprob");
+  int iprob = pin->GetInteger("problem","iprob"); // -1: field loop; 0: uniform; > 0: blast
   Real rout = pin->GetReal("problem","radius");
   Real dr  =  pin->GetReal("problem","ramp");
   Real pa   = pin->GetReal("problem","pamb");
@@ -1354,6 +1354,59 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
     return;
   }
+
+  if (iprob == 0) { // uniform everything
+    for (int k=ks; k<=ke; k++) {
+      for (int j=js; j<=je; j++) {
+        for (int i=is; i<=ie; i++) {
+          phydro->u(IDN,k,j,i) = 1.0;
+          phydro->u(IM1,k,j,i) = 0.0;
+          phydro->u(IM2,k,j,i) = 0.0;
+          phydro->u(IM3,k,j,i) = 0.0;
+        }
+      }
+    }
+    // initialize interface B
+    for (int k=ks; k<=ke; k++) {
+      for (int j=js; j<=je; j++) {
+        for (int i=is; i<=ie+1; i++) {
+          pfield->b.x1f(k,j,i) = b0*std::cos(angle);
+        }
+      }
+    }
+    for (int k=ks; k<=ke; k++) {
+      for (int j=js; j<=je+1; j++) {
+        for (int i=is; i<=ie; i++) {
+          pfield->b.x2f(k,j,i) = b0*std::sin(angle);
+        }
+      }
+    }
+    for (int k=ks; k<=ke+1; k++) {
+      for (int j=js; j<=je; j++) {
+        for (int i=is; i<=ie; i++) {
+          pfield->b.x3f(k,j,i) = bz0;
+        }
+      }
+    }
+    // initialize total energy
+    if (NON_BAROTROPIC_EOS) {
+      for (int k=ks; k<=ke; k++) { 
+        for (int j=js; j<=je; j++) { 
+          for (int i=is; i<=ie; i++) {
+            phydro->u(IEN,k,j,i) =  1.0/gm1 +
+                                   +0.5*(SQR(0.5*(pfield->b.x1f(k,j,i) + pfield->b.x1f(k,j,i+1))) +
+                                         SQR(0.5*(pfield->b.x2f(k,j,i) + pfield->b.x2f(k,j+1,i))) +
+                                         SQR(0.5*(pfield->b.x3f(k,j,i) + pfield->b.x3f(k+1,j,i)))) 
+                                   +0.5*(  SQR(phydro->u(IM1,k,j,i)) 
+                                         + SQR(phydro->u(IM2,k,j,i))
+                                         + SQR(phydro->u(IM3,k,j,i)))
+                                       /phydro->u(IDN,k,j,i);
+          }
+        }
+      }
+    }
+    return;
+  } 
 
   // setup uniform ambient medium with spherical over-pressured region
   for (int k=ks; k<=ke; k++) {

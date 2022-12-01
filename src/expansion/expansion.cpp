@@ -26,6 +26,7 @@
 #ifdef MPI_PARALLEL
 #include <mpi.h>
 #endif
+#define DEBUG
 //----------------------------------------------------------------------------------------
 // Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin)
 //   \brief constructor, initializes data structures and parameters
@@ -373,6 +374,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
     //    } 
     //  }
     //}
+    if (1==0) {
     if (pmesh->dimension < 2) {
       for (int k=ks; k<=ke; ++k) { // B2
         for (int j=js; j<=ju; ++j) {
@@ -401,6 +403,52 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         }
       }
     }
+  } else { // use rescaling
+    for (int k=ks; k<=ke; ++k) { // B1
+      for (int j=js; j<=je; ++j) {
+        pmb->pcoord->Face1Area(k,j,is,iu,areaold);  // old area at position i ("lower")
+        Real darea2 = pmb->pcoord->dx3f(k)*(v2f(j+1)-v2f(j))*dt;
+        Real darea3 = pmb->pcoord->dx2f(j)*(v3f(k+1)-v3f(k))*dt;   
+#ifndef DEBUG
+#pragma omp simd
+#endif
+        for (int i=is; i<=iu; ++i) {
+          areanew           = areaold(i) + darea2 + darea3;
+          b_out.x1f(k,j,i) *= areaold(i)/areanew;
+#ifdef DEBUG
+          if ((i>=6) && (i<=7) && (j>=6) && (j<=7)) {
+            fprintf(stdout,"[RescaleField]: i=%3i j=%3i darea2=%13.5e darea3=%13.5e areaold=%13.5e areanew=%13.5e b1=%13.5e\n",
+                    i,j,darea2,darea3,areaold(i),areanew,b_out.x1f(k,j,i));
+          }
+#endif
+        }
+      } 
+    }
+    for (int k=ks; k<=ke; ++k) { // B2
+      for (int j=js; j<=ju; ++j) {
+        pmb->pcoord->Face2Area(k,j,is,ie,areaold);  // old area at position i ("lower")
+#pragma omp simd 
+        for (int i=is; i<=ie; ++i) {
+          Real darea1 = pmb->pcoord->dx3f(k)*(v1f(i+1)-v1f(i))*dt;
+          Real darea3 = pmb->pcoord->dx1f(i)*(v3f(k+1)-v3f(k))*dt;
+          areanew           = areaold(i) + darea1 + darea3;
+          b_out.x2f(k,j,i) *= areaold(i)/areanew;
+        }
+      }
+    }
+    for (int k=ks; k<=ku; ++k) { // B3
+      for (int j=js; j<=je; ++j) {
+        pmb->pcoord->Face3Area(k,j,is,ie,areaold);  // old area at position i ("lower")
+#pragma omp simd 
+        for (int i=is; i<=ie; ++i) {
+          Real darea1 = pmb->pcoord->dx2f(j)*(v1f(i+1)-v1f(i))*dt;
+          Real darea2 = pmb->pcoord->dx1f(i)*(v2f(j+1)-v2f(j))*dt;
+          areanew           = areaold(i) + darea1 + darea2;
+          b_out.x3f(k,j,i) *= areaold(i)/areanew;
+        }
+      }
+    }
+  } // trial branch for rescaling
   } else if (COORDINATE_SYSTEM == "cylindrical") {
     for (int k=ks; k<=ke; ++k) {
       dx3 = pmb->pcoord->dx3f(k)+v3f(k+1)*dt - v3f(k)*dt ;

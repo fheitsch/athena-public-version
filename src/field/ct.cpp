@@ -22,6 +22,8 @@
 #include <omp.h>
 #endif
 
+#define DEBUG
+
 //----------------------------------------------------------------------------------------
 //! \fn  void Field::CT
 //  \brief Constrained Transport implementation of dB/dt = -Curl(E), where E=-(v X B)
@@ -68,6 +70,16 @@ void Field::CT(const Real wght, FaceField &b_out) {
       }
     }
   }}
+  
+#ifdef DEBUG
+  for (int j=6; j<=7; ++j) {
+    for (int i=6; i<=7; ++i) {
+      fprintf(stdout,"[ct]: i=%3i j=%3i e3(%1i,%1i)=%13.5e e3(%1i,%1i)=%13.5e b1out(%1i,%1i)=%13.5e\n",
+              i,j,j+1,i,e3(ks,j+1,i),j,i,e3(ks,j,i),j,i,b_out.x1f(ks,j,i));
+    }
+  }
+#endif
+ 
 
 //---- update B2 (curl terms in 1D and 3D problems)
 
@@ -97,6 +109,16 @@ void Field::CT(const Real wght, FaceField &b_out) {
       }
     }
   }
+
+#ifdef DEBUG
+  for (int j=6; j<=7; ++j) {
+    for (int i=6; i<=7; ++i) {
+      fprintf(stdout,"[ct]: i=%3i j=%3i e3(%1i,%1i)=%13.5e e3(%1i,%1i)=%13.5e b2out(%1i,%1i)=%13.5e\n",
+              i,j,j,i+1,e3(ks,j,i+1),j,i,e3(ks,j,i),j,i,b_out.x2f(ks,j,i));
+    }
+  }
+#endif
+
 
 //---- update B3 (curl terms in 1D and 2D problems)
 

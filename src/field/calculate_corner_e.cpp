@@ -18,6 +18,8 @@
 #include "../coordinates/coordinates.hpp"
 #include "../hydro/hydro.hpp"
 #include "field_diffusion/field_diffusion.hpp"
+
+#define DEBUG
 //----------------------------------------------------------------------------------------
 //! \fn  void Field::ComputeCornerEMFs
 //  \brief
@@ -91,11 +93,17 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
         ev2 = evel2(j);       
         // need to subtract grid velocity from w(IVY) etc. 
         // The EMFs in e3_x2f etc already include the wall motion via Riemann solver.
+#ifndef DEBUG
 #pragma omp simd
+#endif
         for (int i=is-1; i<=ie+1; ++i) {
           ev1 = evel1(i);
           cc_e_(k,j,i) =   (w(IVY,k,j,i)-ev2)*bcc(IB1,k,j,i) 
                          - (w(IVX,k,j,i)-ev1)*bcc(IB2,k,j,i);
+#ifdef DEBUG
+          fprintf(stdout,"[emf]: i=%3i j=%3i cce=%13.5e vx=%13.5e evx=%13.5e vy=%13.5e evy=%13.5e bcc1=%13.5e bcc2=%13.5e\n",
+                  i,j,cc_e_(k,j,i),w(IVX,k,j,i),ev1,w(IVY,k,j,i),ev2,bcc(IB1,k,j,i),bcc(IB2,k,j,i));        
+#endif
         }
       } else { // standard branch without expansion
 #pragma omp simd
@@ -110,7 +118,9 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
   // integrate E3 to corner using SG07
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je+1; ++j) {
-//#pragma omp simd
+#ifndef DEBUG
+#pragma omp simd
+#endif
       for (int i=is; i<=ie+1; ++i) {
         Real de3_l2 = (1.0-w_x1f(k,j-1,i))*(e3_x2f(k,j,i  ) - cc_e_(k,j-1,i  )) +
                       (    w_x1f(k,j-1,i))*(e3_x2f(k,j,i-1) - cc_e_(k,j-1,i-1));
@@ -126,20 +136,34 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
 
         e3(k,j,i) = 0.25*(de3_l1 + de3_r1 + de3_l2 + de3_r2 + e3_x2f(k,j,i-1) +
           e3_x2f(k,j,i) + e3_x1f(k,j-1,i) + e3_x1f(k,j,i));
-        if (j == 101) {
-          if (EXPANDING_ENABLED) {
-            fprintf(stdout,"[emf]: i=%4i e3corner=%13.5e e3center=%13.5e vx=%13.5e vy=%13.5e ev1=%13.5e E3x=%13.5e E3y=%13.5e Ec3x=%13.5e Ec3y=%13.5e\n",
-                    i,e3(k,j,i),cc_e_(k,j,i),w(IVX,k,j,i),w(IVY,k,j,i),evel1(i),e3_x1f(k,j,i),e3_x2f(k,j,i),
-                   (w(IVY,k,j,i)-evel2(j))*bcc(IB1,k,j,i),(w(IVX,k,j,i)-evel1(i))*bcc(IB2,k,j,i));
-          } else {
-            fprintf(stdout,"[emf]: i=%4i e3corner=%13.5e e3center=%13.5e vx=%13.5e vy=%13.5e ev1=%13.5e E3x=%13.5e E3y=%13.5e Ec3x=%13.5e Ec3y=%13.5e\n",
-                    i,e3(k,j,i),cc_e_(k,j,i),w(IVX,k,j,i),w(IVY,k,j,i),0.0,e3_x1f(k,j,i),e3_x2f(k,j,i),
-                   (w(IVY,k,j,i))*bcc(IB1,k,j,i),(w(IVX,k,j,i))*bcc(IB2,k,j,i));
-          }
+#ifdef DEBUG
+        if ((i>=6) && (i<=7) && (j>=6) && (j<=7)) {
+          fprintf(stdout,"[emf]: i=%2i j=%2i cce(%1i,%1i)=%13.5e cce(%1i,%1i)=%13.5e cce(%1i,%1i)=%13.5e cce(%1i,%1i)=%13.5e wx1f(%1i,%1i)=%13.5e wx1f(%1i,%1i)=%13.5e wx2f(%1i,%1i)=%13.5e wx2f(%1i,%1i)=%13.5e\n",
+                  i,j,j,i,cc_e_(k,j,i),j-1,i,cc_e_(k,j-1,i),j,i-1,cc_e_(k,j,i-1),j-1,i-1,cc_e_(k,j-1,i-1),j,i,w_x1f(k,j,i),j-1,i,w_x1f(k,j-1,i),j,i,w_x2f(k,j,i),j,i-1,w_x2f(k,j,i-1));
+          fprintf(stdout,"[emf]: i=%2i j=%2i e3(%1i,%1i)=%13.5e e3x2f(%1i,%1i)=%13.5e e3x2f(%1i,%1i)=%13.5e e3x1f(%1i,%1i)=%13.5e e3x1f(%1i,%1i)=%13.5e l1=%13.5e r1=%13.5e l2=%13.5e r2=%13.5e\n",
+                  i,j,j,i,e3(k,j,i),j,i-1,e3_x2f(k,j,i-1),j,i,e3_x2f(k,j,i),j-1,i,e3_x1f(k,j-1,i),j,i,e3_x1f(k,j,i),de3_l1,de3_r1,de3_l2,de3_r2);
+        }
+#endif
+      }
+    }
+  }
+#ifdef DEBUG
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=6; j<=7; ++j) {
+      for (int i=6; i<=7; ++i) {
+        if (EXPANDING_ENABLED) {
+          fprintf(stdout,"[emf]: i=%4i j=%4i e3corner=%13.5e e3center=%13.5e vx=%13.5e vy=%13.5e ev1=%13.5e ev2=%13.5e E3x=%13.5e E3y=%13.5e Ec3x=%13.5e Ec3y=%13.5e\n",
+                  i,j,e3(k,j,i),cc_e_(k,j,i),w(IVX,k,j,i),w(IVY,k,j,i),evel1(i),evel2(j),e3_x1f(k,j,i),e3_x2f(k,j,i),
+                  -(w(IVX,k,j,i)-evel1(i))*bcc(IB2,k,j,i),(w(IVY,k,j,i)-evel2(j))*bcc(IB1,k,j,i));
+        } else {
+          fprintf(stdout,"[emf]: i=%4i e3corner=%13.5e e3center=%13.5e vx=%13.5e vy=%13.5e ev1=%13.5e ev2=%13.5e E3x=%13.5e E3y=%13.5e Ec3x=%13.5e Ec3y=%13.5e\n",
+                  i,e3(k,j,i),cc_e_(k,j,i),w(IVX,k,j,i),w(IVY,k,j,i),0.0,0.0,e3_x1f(k,j,i),e3_x2f(k,j,i),
+                 -(w(IVY,k,j,i))*bcc(IB1,k,j,i),(w(IVX,k,j,i))*bcc(IB2,k,j,i));
         }
       }
     }
   }
+#endif
 
   // for 2D: copy E1 and E2 to edges and return
   if (pmb->block_size.nx3 == 1) {

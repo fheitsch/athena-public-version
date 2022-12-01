@@ -447,9 +447,6 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       ey(k,j,i) += wi[IBY]*wallV; // modify ey, ez directly here. 
       ez(k,j,i) -= wi[IBZ]*wallV;
     } // if (EXPANDING_ENABLED)
-    if (j==101) {
-      fprintf(stdout,"[hlld]: i=%4i ey=%13.5e ez=%13.5e\n",i,ey(k,j,i),ez(k,j,i));
-    }
 
 
   }

@@ -100,12 +100,23 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
     for (int j=jl; j<=ju; ++j) {
 
       pmb->pcoord->CenterWidth1(k,j,is,ie+1,dxw);
+      if (EXPANDING_ENABLED) {
 #pragma omp simd
-      for (int i=is; i<=ie+1; ++i) {
-        Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*x1flux(IDN,k,j,i)
-                      / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
-        Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
-        w_x1f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+        for (int i=is; i<=ie+1; ++i) {
+          Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x1flux(IDN,k,j,i)-e1flux(IDN,k,j,i))
+                        / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
+          Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
+          w_x1f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+        }
+
+      } else {
+#pragma omp simd
+        for (int i=is; i<=ie+1; ++i) {
+          Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*x1flux(IDN,k,j,i)
+                        / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
+          Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
+          w_x1f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+        }
       }
 
     }}
@@ -144,12 +155,22 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
       for (int k=kl; k<=ku; ++k) {
       for (int j=js; j<=je+1; ++j) {
         pmb->pcoord->CenterWidth2(k,j,il,iu,dxw);
+        if (EXPANDING_ENABLED) {
 #pragma omp simd
-        for (int i=il; i<=iu; ++i) {
-          Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*x2flux(IDN,k,j,i)
-                        / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
-          Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
-          w_x2f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+          for (int i=il; i<=iu; ++i) {
+            Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x2flux(IDN,k,j,i)-e2flux(IDN,k,j,i))
+                          / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
+            Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
+            w_x2f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+          }
+        } else {
+#pragma omp simd
+          for (int i=il; i<=iu; ++i) {
+            Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*x2flux(IDN,k,j,i)
+                          / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
+            Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
+            w_x2f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+          }
         }
       }}
     }
@@ -184,12 +205,22 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
       for (int k=ks; k<=ke+1; ++k) {
       for (int j=jl; j<=ju; ++j) {
         pmb->pcoord->CenterWidth3(k,j,il,iu,dxw);
+        if (EXPANDING_ENABLED) {
 #pragma omp simd
-        for (int i=il; i<=iu; ++i) {
-          Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*x3flux(IDN,k,j,i)
-                        / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
-          Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
-          w_x3f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+          for (int i=il; i<=iu; ++i) {
+            Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x3flux(IDN,k,j,i)-e3flux(IDN,k,j,i))
+                          / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
+            Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
+            w_x3f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+          }
+        } else {
+#pragma omp simd
+          for (int i=il; i<=iu; ++i) {
+            Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*x3flux(IDN,k,j,i)
+                          / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
+            Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
+            w_x3f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
+          }
         }
       }}
     }
