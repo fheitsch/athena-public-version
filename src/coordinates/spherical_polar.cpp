@@ -571,9 +571,9 @@ void SphericalPolar::CoordSrcTerms(const Real dt, const AthenaArray<Real> *flux,
 
           u(IM3,k,j,i) -= dt*coord_src1_i_(i)*coord_src3_j_(j)*m_ph;
         }
-        // src term for internal energy -2*v_R*P/r. fh++
+        // src term for internal energy -2*v_R*P/r. fh++. Fixed 230207.
         if (DUAL_ENERGY) {
-          u(IIE,k,j,i) -= -2.0*dt*prim(IGE,k,j,i)*prim(IVX,k,j,i)*coord_src1_i_(i); 
+          u(IIE,k,j,i) -= 2.0*dt*prim(IGE,k,j,i)*prim(IVX,k,j,i)*coord_src1_i_(i); 
         }
       }
     }
@@ -589,5 +589,5 @@ void SphericalPolar::CoordSrcTerms(const Real dt, const AthenaArray<Real> *flux,
 void SphericalPolar::CoordSrcTermsCL(const Real dt, const AthenaArray<Real> *flux,
                                      const AthenaArray<Real> &prim,
                                      AthenaArray<Real> &u) {
-	return;
+  return;
 }

@@ -57,13 +57,11 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
 
   int n;
   Real wi[(NHYDRO)];
-  Real wallV = 0.0;
-  Real e;
 
   for (int k=kl; k<=ku; ++k) {
   for (int j=jl; j<=ju; ++j) {
 #pragma distribute_point
-#pragma omp simd private(n,wli,wri,wroe,flxi,fl,fr,wi,wallV,e)
+#pragma omp simd private(n,wli,wri,wroe,flxi,fl,fr,wi)
   for (int i=il; i<=iu; ++i) {
 
 //--- Step 1.  Load L/R states into local variables
@@ -87,6 +85,7 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       wri[IGE]=wr(IGE,k,j,i);
     for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
       wri[n] = wr(n,k,j,i);
+
 
 //--- Step2.  Compute Roe-averaged state
 
@@ -194,23 +193,25 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
     for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++) 
       flx(n,k,j,i)   = (flxi[IDN] >= 0 ? flxi[IDN]*wli[n] : flxi[IDN]*wri[n]);
 
+
     //For Time Dependent grid, account for Wall Flux
     if ((EXPANDING_ENABLED) && (move)) {
+      Real wallv, e;
       //--- Step 1. Determine Flux Direction
       if (ivx == IVX){
-        wallV = eVel(i);
+        wallv = eVel(i);
       } else if (ivx == IVY) {
-        wallV = eVel(j);
+        wallv = eVel(j);
       } else if (ivx == IVZ){
-        wallV = eVel(k);
+        wallv = eVel(k);
       } else {
-        wallV = 0.0;
+        wallv = 0.0;
       }
       //--- Step 2. Load primitive Variables
-      if (wallV > 0.0) {
+      if (wallv > 0.0) {
         for (n=0; n<NHYDRO; ++n) 
           wi[n] = wri[n];
-      } else if (wallV < 0.0) {
+      } else if (wallv < 0.0) {
         for (n=0; n<NHYDRO; ++n)
           wi[n] = wli[n];
       } else {
@@ -219,15 +220,15 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       }
 
       e = wi[IPR]*igm1 + 0.5*wi[IDN]*(SQR(wi[IVX]) + SQR(wi[IVY]) + SQR(wi[IVZ]));
-      eFlx(IDN,k,j,i) = wi[IDN]*wallV;
-      eFlx(ivx,k,j,i) = wi[IDN]*wi[IVX]*wallV;
-      eFlx(ivy,k,j,i) = wi[IDN]*wi[IVY]*wallV;
-      eFlx(ivz,k,j,i) = wi[IDN]*wi[IVZ]*wallV;
-      eFlx(IEN,k,j,i) = e*wallV;
+      eFlx(IDN,k,j,i) = wi[IDN]*wallv;
+      eFlx(ivx,k,j,i) = wi[IDN]*wi[IVX]*wallv;
+      eFlx(ivy,k,j,i) = wi[IDN]*wi[IVY]*wallv;
+      eFlx(ivz,k,j,i) = wi[IDN]*wi[IVZ]*wallv;
+      eFlx(IEN,k,j,i) = e*wallv;
       if (DUAL_ENERGY) 
-        eFlx(IIE,k,j,i) = wi[IGE]*wallV*igm1; // IGE is pressure
+        eFlx(IIE,k,j,i) = wi[IGE]*wallv*igm1; // IGE is pressure
       for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++) 
-        eFlx(n,k,j,i) = wi[IDN]*wi[n]*wallV;
+        eFlx(n,k,j,i) = wi[IDN]*wi[n]*wallv;
       //fprintf(stdout,"eFlx=%13.5e k,j,i=%3i %3i %3i\n",eFlx(IDN,k,j,i),k,j,i);
 
     } //End Expanding

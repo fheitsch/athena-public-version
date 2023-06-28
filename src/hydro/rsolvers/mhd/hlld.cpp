@@ -11,6 +11,9 @@
 //   MHD", JCP, 208, 315 (2005)
 
 // C++ headers
+
+//#define DEBUG
+
 #include <algorithm>  // max(), min()
 #include <cmath>      // sqrt()
 
@@ -39,8 +42,10 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
   int ivz = IVX + ((ivx-IVX)+2)%3;
 
   Expansion *ex = pmy_block->pex;
-  AthenaArray<Real> &eFlx = ex->expFlux[(ivx-1)];
-  AthenaArray<Real> &eVel = ex->vf[(ivx-1)];
+  AthenaArray<Real> &eflx  = ex->expFlux[(ivx-1)];
+  AthenaArray<Real> &evel  = ex->vf[(ivx-1)];
+  AthenaArray<Real> &evely = ex->vv[(ivy-1)]; // These are the cross term velocities for the wall fluxes.
+  AthenaArray<Real> &evelz = ex->vv[(ivz-1)];
   bool move = false;
   if (EXPANDING_ENABLED) {
     if ((ivx == IVX)&&(ex->x1Move)){
@@ -52,7 +57,7 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
     }
   }
   Real wi[(NHYDRO+2)];
-  Real wallV = 0.0;
+  Real wallv = 0.0, wallvy = 0.0, wallvz = 0.0;
   Real e;
   int n;
 
@@ -77,8 +82,10 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
   for (int j=jl; j<=ju; ++j) {
 
 //#pragma omp simd simdlen(SIMD_WIDTH) private(wli,wri,spd,flxi)
+#ifndef DEBUG
 #pragma distribute_point
-#pragma omp simd private(n,wli,wri,spd,flxi,wi,wallV,e)
+#pragma omp simd private(n,wli,wri,spd,flxi,wi,wallv,wallvy,wallvz,e)
+#endif
   for (int i=il; i<=iu; ++i) {
     Cons1D ul,ur;                   // L/R states, conserved variables (computed)
     Cons1D ulst,uldst,urdst,urst;   // Conserved variable for all states
@@ -403,6 +410,21 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
     ey(k,j,i) = -flxi[IBY];
     ez(k,j,i) =  flxi[IBZ];
 
+#ifdef DEBUG
+      // e3x2f(6,7)=  0.00e+00 e3x2f(7,7)=  0.00e+00 e3x1f(7,6)=  0.00e+00 e3x1f(7,7)=  0.00e+00
+      // e3x2f(6,8)= -1.00e+00 e3x2f(7,8)= -1.00e+00 e3x1f(7,7)=  0.00e+00 e3x1f(7,8)=  0.00e+00
+      if (ivx == IVX) { // ey = e3x1.
+        if ((i==7) && ((j==7) || (j==8))) {
+          fprintf(stdout,"[hlld]: before expand: ivx=%1i e3x1f(%1i,%1i)=%10.2e\n",ivx,i,j,ey(k,j,i));
+        }
+      } else if (ivx == IVY) { // ez = e3x2.
+        if (((i==6) || (i==7)) && (j==8)) {
+          fprintf(stdout,"[hlld]: before expand: ivx=%1i e3x2f(%1i,%1i)=%10.2e\n",ivx,i,j,ez(k,j,i));
+        }
+      }
+#endif
+
+
     if (DUAL_ENERGY)  // IGE is pressure
       flx(IIE,k,j,i) = (flxi[IDN] >= 0 ? flxi[IDN]*wli[IGE]/wli[IDN] : flxi[IDN]*wri[IGE]/wri[IDN])*igm1;
 
@@ -413,19 +435,27 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
     if ((EXPANDING_ENABLED) && (move)) {
       //--- Step 1. Determine Flux Direction
       if (ivx == IVX){
-        wallV = eVel(i);
+        wallv  = evel(i);   // 1
+        wallvy = evely(j);  // 2
+        wallvz = evelz(k);  // 3
       } else if (ivx == IVY) {
-        wallV = eVel(j);
+        wallv  = evel(j);   // 2
+        wallvy = evely(k);  // 3
+        wallvz = evelz(i);  // 1
       } else if (ivx == IVZ){
-        wallV = eVel(k);
+        wallv  = evel(k);   // 3
+        wallvy = evely(i);  // 1
+        wallvz = evelz(j);  // 2
       } else {
-        wallV = 0.0;
+        wallv  = 0.0;
+        wallvy = 0.0;
+        wallvz = 0.0;
       }
       //--- Step 2. Load primitive variables
-      if (wallV > 0.0) {
+      if (wallv > 0.0) {
         for (n=0; n<(NHYDRO+2); ++n)
           wi[n] = wri[n];
-      } else if (wallV < 0.0) {
+      } else if (wallv < 0.0) {
         for (n=0; n<(NHYDRO+2); ++n)
           wi[n] = wli[n];
       } else {
@@ -435,17 +465,30 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       e =   wi[IPR]*igm1 
           + 0.5*wi[IDN]*(SQR(wi[IVX]) + SQR(wi[IVY]) + SQR(wi[IVZ])) 
           + 0.5*(bxsq + SQR(wi[IBY]) + SQR(wi[IBZ]));
-      eFlx(IDN,k,j,i) = wi[IDN]*wallV;
-      eFlx(ivx,k,j,i) = wi[IDN]*wi[IVX]*wallV;
-      eFlx(ivy,k,j,i) = wi[IDN]*wi[IVY]*wallV;
-      eFlx(ivz,k,j,i) = wi[IDN]*wi[IVZ]*wallV;
-      eFlx(IEN,k,j,i) = e*wallV;
+      eflx(IDN,k,j,i) = wi[IDN]*wallv;
+      eflx(ivx,k,j,i) = wi[IDN]*wi[IVX]*wallv;
+      eflx(ivy,k,j,i) = wi[IDN]*wi[IVY]*wallv;
+      eflx(ivz,k,j,i) = wi[IDN]*wi[IVZ]*wallv;
+      eflx(IEN,k,j,i) = e*wallv;
       if (DUAL_ENERGY)
-        eFlx(IIE,k,j,i) = wi[IGE]*wallV*igm1; // IGE is pressure
+        eflx(IIE,k,j,i) = wi[IGE]*wallv*igm1; // IGE is pressure
       for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
-        eFlx(n,k,j,i) = wi[IDN]*wi[n]*wallV;
-      ey(k,j,i) += wi[IBY]*wallV; // modify ey, ez directly here. 
-      ez(k,j,i) -= wi[IBZ]*wallV;
+        eflx(n,k,j,i) = wi[IDN]*wi[n]*wallv;
+      ey(k,j,i) += (wi[IBY]*wallv - bxi*wallvy); // modify ey, ez directly here. 
+      ez(k,j,i) -= (wi[IBZ]*wallv - bxi*wallvz);
+#ifdef DEBUG
+      // e3x2f(6,7)=  0.00e+00 e3x2f(7,7)=  0.00e+00 e3x1f(7,6)=  0.00e+00 e3x1f(7,7)=  0.00e+00
+      // e3x2f(6,8)= -1.00e+00 e3x2f(7,8)= -1.00e+00 e3x1f(7,7)=  0.00e+00 e3x1f(7,8)=  0.00e+00
+      if (ivx == IVX) { // ey = e3x1.
+        if ((i==7) && ((j==7) || (j==8))) {
+          fprintf(stdout,"[hlld]: after  expand: ivx=%1i e3x1f(%1i,%1i)=%10.2e\n",ivx,i,j,ey(k,j,i));
+        }
+      } else if (ivx == IVY) { // ez = e3x2.
+        if (((i==6) || (i==7)) && (j==8)) {
+          fprintf(stdout,"[hlld]: after  expand: ivx=%1i e3x2f(%1i,%1i)=%10.2e\n",ivx,i,j,ez(k,j,i));
+        }
+      }
+#endif
     } // if (EXPANDING_ENABLED)
 
 

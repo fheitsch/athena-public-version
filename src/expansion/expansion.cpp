@@ -26,7 +26,7 @@
 #ifdef MPI_PARALLEL
 #include <mpi.h>
 #endif
-#define DEBUG
+//#define DEBUG
 //----------------------------------------------------------------------------------------
 // Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin)
 //   \brief constructor, initializes data structures and parameters
@@ -215,10 +215,13 @@ void Expansion::IntegrateWalls(Real dt){
   AthenaArray<Real> &v2f = vf[X2DIR];
   AthenaArray<Real> &v3f = vf[X3DIR];
   if (x1Move) {
+    //for (int i=is; i<=ie+1; ++i) {
+    //  fprintf(stdout,"[IntegrateWalls]: i=%3i v1f=%17.9e dt=%17.9e xold=%17.9e xnew=%17.9e ratold=%17.9e ratnew=%17.9e\n",
+    //          i,v1f(i),dt,x1_0(i),x1_0(i)+dt*v1f(i),x1_0(i)/x1_0(i-1),(x1_0(i)+dt*v1f(i))/(x1_0(i-1)+dt*v1f(i-1)));
+    //}
 #pragma omp simd
     for (int i=il; i<=iu+1; ++i) {
       x1_0(i) += dt*v1f(i);
-      //fprintf(stdout,"[IntegrateWalls]: i=%3i v1f=%15.7e dt=%15.7e xold=%15.7e xnew=%15.7e\n",i,v1f(i),dt,x1_0(i)-dt*v1f(i),x1_0(i));
     }
   }
   if (x2Move) {
@@ -248,8 +251,8 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
   Real dx2 = 0.0;
   Real dx3 = 0.0;
   Real volume = 0.0;
-  Real newVol = 0.0;
-  Real oldVol = 0.0;
+  Real newvol = 0.0;
+  Real oldvol = 0.0;
   Real vol = 0.0;
   Real A1 = 0.0;
   Real A2 = 0.0;
@@ -270,7 +273,7 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
     for (int j = js; j<=je;++j) {
 #pragma omp simd
       for (int i = is; i<=ie;++i) {
-        oldVol = pc->GetCellVolume(k,j,i);
+        oldvol = pc->GetCellVolume(k,j,i);
       	if (COORDINATE_SYSTEM == "cartesian") {
           //original version
       	  //dx1 = pc->dx1f(i)+v1f(i+1)*dt - v1f(i)*dt ;
@@ -281,21 +284,29 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
           Real dvol1 = pc->GetFace1Area(k,j,i)*(v1f(i+1)-v1f(i))*dt; 
           Real dvol2 = pc->GetFace2Area(k,j,i)*(v2f(j+1)-v2f(j))*dt; 
           Real dvol3 = pc->GetFace3Area(k,j,i)*(v3f(k+1)-v3f(k))*dt; 
-          newVol     = oldVol + dvol1 + dvol2 + dvol3;
+          newvol     = oldvol + dvol1 + dvol2 + dvol3;
       	} else if (COORDINATE_SYSTEM == "cylindrical") {
           // these have not been updated yet to differential updates
       	  dx1 = pc->coord_vol_i_(i) + dt*(v1f(i+1)*pc->x1f(i+1)-v1f(i)*pc->x1f(i))
       				    + 0.5*pow(dt,2.0)*(pow(v1f(i+1),2.0) - pow(v1f(i),2.0));
       	  dx2 = pc->dx2f(j)+v2f(j+1)*dt - v2f(j)*dt ;
       	  dx3 = pc->dx3f(k)+v3f(k+1)*dt - v3f(k)*dt ;
-      	  newVol = dx1*dx2*dx3;
+      	  newvol = dx1*dx2*dx3;
       	} else if (COORDINATE_SYSTEM == "spherical_polar") {
-      	  dx1 = pc->coord_vol_i_(i) + dt*(v1f(i+1)*pow(pc->x1f(i+1),2.0)-v1f(i)*pow(pc->x1f(i),2.0))
-      				    + pow(dt,2.0)*(pow(v1f(i+1),2.0)*pc->x1f(i+1) - pow(v1f(i),2.0)*pc->x1f(i))
-      				    + 1.0/3.0*pow(dt,3.0)*(pow(v1f(i+1),3.0) - pow(v1f(i),3.0));
-      	  dx2 = fabs(cos(pc->x2f(j)+v2f(j)*dt) - cos(pc->x2f(j+1)+v2f(j+1)*dt));
-      	  dx3 = pc->dx3f(k)+v3f(k+1)*dt - v3f(k)*dt ;
-      	  newVol = dx1*dx2*dx3;
+          // original version
+      	  //dx1 = pc->coord_vol_i_(i) + dt*(v1f(i+1)*pow(pc->x1f(i+1),2.0)-v1f(i)*pow(pc->x1f(i),2.0))
+          //                            + pow(dt,2.0)*(pow(v1f(i+1),2.0)*pc->x1f(i+1) - pow(v1f(i),2.0)*pc->x1f(i))
+          //                            + 1.0/3.0*pow(dt,3.0)*(pow(v1f(i+1),3.0) - pow(v1f(i),3.0));
+      	  //dx2 = fabs(cos(pc->x2f(j)+v2f(j)*dt) - cos(pc->x2f(j+1)+v2f(j+1)*dt));
+      	  //dx3 = pc->dx3f(k)+v3f(k+1)*dt - v3f(k)*dt ;
+          // The spherical volume element is x1^2 * dx1 * sin(x2) dx2 * dx3.
+          // Since x2 and x3 don't move, we only need derivative for x1:
+          // dV = sin(x2)*dx2 * dx3 * x1^2 * dv1 * dt, where x1 is taken at cell center
+          // Construct derivatives analogously to volume calculation in sperical_polar.cpp. This
+          // yields identical results to the above, but is faster. dx2 and dx3 are not needed in
+          // spherical-polar. 
+          Real dvol1 = (SQR(pc->x1f(i+1))*v1f(i+1)-SQR(pc->x1f(i))*v1f(i))*pc->coord_vol_j_(j)*pc->dx3f(k)*dt;
+      	  newvol = oldvol + dvol1; 
       	}
    
         for (int n = 0; n<(NHYDRO); ++n) {
@@ -307,6 +318,9 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
           A2 = pc->GetFace1Area(k,j,i+1);
           if (x1Move) {
             divF1 = x1flux(n,k,j,i+1)*A2 - x1flux(n,k,j,i) * A1;
+            //if (((n==0) || (n==4)) && (i > 32) && (i < 37))
+            //  fprintf(stdout,"[ExpansionSrcTerm]: i=%3i n=%1i dflx=%17.9e A1p=%17.9e fp=%17.9e A1m=%17.9e fm=%17.9e\n",
+            //          i,n,divF1,A2,x1flux(n,k,j,i+1),A1,x1flux(n,k,j,i));
           }
           if (x2Move){
             A1 = pc->GetFace2Area(k,j,i);
@@ -319,7 +333,7 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
             divF3 = x3flux(n,k+1,j,i)*A2 - x3flux(n,k,j,i) * A1;
           }
           cons(n,k,j,i) += dt/vol*(divF1 + divF2 + divF3);
-          cons(n,k,j,i) *= oldVol/newVol;
+          cons(n,k,j,i) *= oldvol/newvol;
         }
       }
     }
@@ -341,8 +355,6 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
 //          recreate (and integrate ahead) the new areas with the weighted timestep.
 //          Note that even for 1D, b2.x2f needs to include js,je+1, otherwise 
 //          CalculateCellCenteredFieldAverage will not work properly.
-//          For restricted dimensions, transverse fields must be rescaled, but 
-//          fields in active dimensions must not be rescaled.
 void Expansion::RescaleField(const Real dt, FaceField &b_out) {
 
   MeshBlock *pmb=pmy_block;
@@ -360,50 +372,6 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
   AthenaArray<Real> &v3f = vf[X3DIR];
 
   if (COORDINATE_SYSTEM == "cartesian") {
-    //if (pmesh->dimension==3) {
-    //  for (int k=ks; k<=ke; ++k) { // B1
-    //    for (int j=js; j<=je; ++j) {
-    //      pmb->pcoord->Face1Area(k,j,is,iu,areaold);  // old area at position i ("lower")
-    //      Real darea2 = pmb->pcoord->dx3f(k)*(v2f(j+1)-v2f(j))*dt;
-    //      Real darea3 = pmb->pcoord->dx2f(j)*(v3f(k+1)-v3f(k))*dt;   
-//#pragma omp simd
-    //      for (int i=is; i<=iu; ++i) {
-    //        areanew           = areaold(i) + darea2 + darea3;
-    //        b_out.x1f(k,j,i) *= areaold(i)/areanew;
-    //      }
-    //    } 
-    //  }
-    //}
-    if (1==0) {
-    if (pmesh->dimension < 2) {
-      for (int k=ks; k<=ke; ++k) { // B2
-        for (int j=js; j<=ju; ++j) {
-          pmb->pcoord->Face2Area(k,j,is,ie,areaold);  // old area at position i ("lower")
-#pragma omp simd 
-          for (int i=is; i<=ie; ++i) {
-            Real darea1 = pmb->pcoord->dx3f(k)*(v1f(i+1)-v1f(i))*dt;
-            Real darea3 = pmb->pcoord->dx1f(i)*(v3f(k+1)-v3f(k))*dt;
-            areanew           = areaold(i) + darea1 + darea3;
-            b_out.x2f(k,j,i) *= areaold(i)/areanew;
-          }
-        }
-      }
-    }
-    if (pmesh->dimension < 3) {
-      for (int k=ks; k<=ku; ++k) { // B3
-        for (int j=js; j<=je; ++j) {
-          pmb->pcoord->Face3Area(k,j,is,ie,areaold);  // old area at position i ("lower")
-#pragma omp simd 
-          for (int i=is; i<=ie; ++i) {
-            Real darea1 = pmb->pcoord->dx2f(j)*(v1f(i+1)-v1f(i))*dt;
-            Real darea2 = pmb->pcoord->dx1f(i)*(v2f(j+1)-v2f(j))*dt;
-            areanew           = areaold(i) + darea1 + darea2;
-            b_out.x3f(k,j,i) *= areaold(i)/areanew;
-          }
-        }
-      }
-    }
-  } else { // use rescaling
     for (int k=ks; k<=ke; ++k) { // B1
       for (int j=js; j<=je; ++j) {
         pmb->pcoord->Face1Area(k,j,is,iu,areaold);  // old area at position i ("lower")
@@ -448,7 +416,6 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         }
       }
     }
-  } // trial branch for rescaling
   } else if (COORDINATE_SYSTEM == "cylindrical") {
     for (int k=ks; k<=ke; ++k) {
       dx3 = pmb->pcoord->dx3f(k)+v3f(k+1)*dt - v3f(k)*dt ;
@@ -549,6 +516,7 @@ void Expansion::UpdateVelData(MeshBlock *pmb ,Real time, Real dt){
   AthenaArray<Real> &v2v = vv[X2DIR];
   AthenaArray<Real> &v3v = vv[X3DIR];
   mydt = dt;
+  //fprintf(stdout,"[UpdateVelData]: Called.\n");
   if (pmb->pmy_mesh->GridDiffEq_ != NULL) {
     //Edit each delx1f, delx2f, delx3f before source terms and editing of grid
     if (x3Move) {
@@ -556,7 +524,7 @@ void Expansion::UpdateVelData(MeshBlock *pmb ,Real time, Real dt){
         v3f(k) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x3f(k),k,pmb->pmy_mesh->time,dt,3,pmb->pmy_mesh->GridData);
       }
       if (MAGNETIC_FIELDS_ENABLED) {
-        for (int k = kl; k<=ku+1;++k) {
+        for (int k = kl; k<=ku;++k) {
           v3v(k) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x3v(k),k,pmb->pmy_mesh->time,dt,3,pmb->pmy_mesh->GridData);
         }
       }
@@ -566,7 +534,7 @@ void Expansion::UpdateVelData(MeshBlock *pmb ,Real time, Real dt){
         v2f(j) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x2f(j),j,pmb->pmy_mesh->time,dt,2,pmb->pmy_mesh->GridData);
       }
       if (MAGNETIC_FIELDS_ENABLED) {
-        for (int j = jl;j<=ju+1;++j) {
+        for (int j = jl;j<=ju;++j) {
           v2v(j) = pmb->pmy_mesh->GridDiffEq_(pmb->pcoord->x2v(j),j,pmb->pmy_mesh->time,dt,2,pmb->pmy_mesh->GridData);
         }
       }
@@ -596,6 +564,7 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
     for (int i=il; i<=iu+1; ++i){
       pmb->pcoord->x1f(i) = x1_0(i);
     }
+    //fprintf(stdout,"x1f=%13.5e %13.5e %13.5e ... %13.5e\n",pmb->pcoord->x1f(is-2),pmb->pcoord->x1f(is-1),pmb->pcoord->x1f(is),pmb->pcoord->x1f(ie+1));
     for (int i=il; i<=iu; ++i) {
       pmb->pcoord->dx1f(i) = pmb->pcoord->x1f(i+1)-pmb->pcoord->x1f(i);
     }
@@ -1005,30 +974,30 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
 
     if (pmb->pcoord->coarse_flag==false){
 #pragma omp simd
-     //Fix internal scratch arrays for good measure
-     for (int i=il; i<=iu; ++i) {
-         Real rm = pmb->pcoord->x1f(i  );
-         Real rp = pmb->pcoord->x1f(i+1);
-         // R^2
-         pmb->pcoord->coord_area1_i_(i) = rm*rm;
-         // 0.5*(R_{i+1}^2 - R_{i}^2)
-         pmb->pcoord->coord_area2_i_(i) = 0.5*(rp*rp - rm*rm);
-         // 0.5*(R_{i+1}^2 - R_{i}^2)
-         pmb->pcoord->coord_area3_i_(i) = pmb->pcoord->coord_area2_i_(i);
-         // dV = (R_{i+1}^3 - R_{i}^3)/3
-         pmb->pcoord->coord_vol_i_(i) = (ONE_3RD)*(rp*rp*rp - rm*rm*rm);
-         // (A1^{+} - A1^{-})/dV
-         pmb->pcoord->coord_src1_i_(i) = pmb->pcoord->coord_area2_i_(i)/pmb->pcoord->coord_vol_i_(i);
-         // (dR/2)/(R_c dV)
-         pmb->pcoord->coord_src2_i_(i) = pmb->pcoord->dx1f(i)/((rm + rp)*pmb->pcoord->coord_vol_i_(i));
-         // Rf_{i}^2/R_{i}^2/Rf_{i}^2
-         pmb->pcoord->phy_src1_i_(i) = 1.0/SQR(pmb->pcoord->x1v(i));
-         // Rf_{i+1}^2/R_{i}^2/Rf_{i+1}^2
-         pmb->pcoord->phy_src2_i_(i) = pmb->pcoord->phy_src1_i_(i);
-         // R^2 at the volume center for non-ideal MHD
-         pmb->pcoord->coord_area1vc_i_(i) = SQR(pmb->pcoord->x1v(i));
-     }
-     pmb->pcoord->coord_area1_i_(iu+ng+1) = pmb->pcoord->x1f(iu+ng+1)*pmb->pcoord->x1f(iu+ng+1);
+      //Fix internal scratch arrays for good measure
+      for (int i=il; i<=iu; ++i) {
+        Real rm = pmb->pcoord->x1f(i  );
+        Real rp = pmb->pcoord->x1f(i+1);
+        // R^2
+        pmb->pcoord->coord_area1_i_(i) = rm*rm;
+        // 0.5*(R_{i+1}^2 - R_{i}^2)
+        pmb->pcoord->coord_area2_i_(i) = 0.5*(rp*rp - rm*rm);
+        // 0.5*(R_{i+1}^2 - R_{i}^2)
+        pmb->pcoord->coord_area3_i_(i) = pmb->pcoord->coord_area2_i_(i);
+        // dV = (R_{i+1}^3 - R_{i}^3)/3
+        pmb->pcoord->coord_vol_i_(i) = (ONE_3RD)*(rp*rp*rp - rm*rm*rm);
+        // (A1^{+} - A1^{-})/dV
+        pmb->pcoord->coord_src1_i_(i) = pmb->pcoord->coord_area2_i_(i)/pmb->pcoord->coord_vol_i_(i);
+        // (dR/2)/(R_c dV)
+        pmb->pcoord->coord_src2_i_(i) = pmb->pcoord->dx1f(i)/((rm + rp)*pmb->pcoord->coord_vol_i_(i));
+        // Rf_{i}^2/R_{i}^2/Rf_{i}^2
+        pmb->pcoord->phy_src1_i_(i) = 1.0/SQR(pmb->pcoord->x1v(i));
+        // Rf_{i+1}^2/R_{i}^2/Rf_{i+1}^2
+        pmb->pcoord->phy_src2_i_(i) = pmb->pcoord->phy_src1_i_(i);
+        // R^2 at the volume center for non-ideal MHD
+        pmb->pcoord->coord_area1vc_i_(i) = SQR(pmb->pcoord->x1v(i));
+      }
+      pmb->pcoord->coord_area1_i_(iu+ng+1) = pmb->pcoord->x1f(iu+ng+1)*pmb->pcoord->x1f(iu+ng+1);
 #pragma omp simd
       for (int i=il; i<=iu-1; ++i) {//non-ideal MHD
         // 0.5*(R_{i+1}^2 - R_{i}^2)
@@ -1122,6 +1091,7 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
   Real dtEx    = (FLT_MAX);
   int count = 0;
   Real overStep = 0.0;
+  //fprintf(stdout,"[GridTimeStep]: Called\n");
   if (x1Move) {
     //for (int i = il; i<=iu+1;i++){
     for (int i = is; i<=ie+1;i++){

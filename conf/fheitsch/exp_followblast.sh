@@ -14,7 +14,6 @@ python3 configure.py\
                          -hdf5 \
                          --ns 1 \
                          -exp \
-                         -debug \
                          -b
                           
 

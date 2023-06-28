@@ -12,11 +12,13 @@
 #include <cmath>
 #include <stdexcept>
 #include <ctime>
+#include <string.h>
 #include <string>
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
 #include <bits/stdc++.h>
+#include <hdf5.h>
 
 // Athena++ headers
 #include "../athena.hpp"
@@ -38,14 +40,14 @@
 #include <omp.h>
 #endif
 
-#if (NSCALARS != 2)
-#error: coolcloud requires NSCALARS==2
+#if (NSCALARS != 1)
+#error: dwarfwake requires NSCALARS==1
 #endif
 
 
 // Cooling variables. These need to be set in InitUserMeshData (restarts!!)
 int ipot;
-Real n0, T0, gm1, v0, grav_acc, dtcool = HUGE_NUMBER, mpot, potrat;
+Real n0, T0, gm1, v0, grav_acc, mpot, potrat, zmet0;
 const Real coolsafe = 0.05;
 
 // Ahead declaration of class CoolingFunction
@@ -80,7 +82,9 @@ static void stop_this() {
 
 //========================================================================================
 // Class CoolingFunction
-// see pyyacc.py
+// mode = 0: see pyyacc.py
+// mode = 1: see Wiersma et al. 2009. Tabulated cooling function in terms of n, T, Z, 
+//           based on CLOUDY models.
 //========================================================================================
 class CoolingFunction {
 
@@ -91,12 +95,17 @@ class CoolingFunction {
     Real gain0, loss0;
     AthenaArray<Real> lhcoeff, ltrangeh, trangeh, hexpo,
                       lccoeff, ltrangec, trangec, cexpo;
+    // Wiersma+09. "0" is metal-free, "z" is only metals, "s" is solar.
+    AthenaArray<Real> xion_0, xion_s, netcool_0, netcool_z, densarr, temparr;
+    int ndens=-1, ntemp=-1;
+    int mode = 0; // 0: power law, 1: Wiersma et al. 2009
 
   public:
 
-    // Constructor. Initializes lookup-table.
+    // Constructor. Initializes lookup-table. This is for the power-law cooling function
     CoolingFunction(int icool) {
 
+      mode    = 0;
       useheat = (icool > 0);
 
       if (std::fabs(icool) == 1) { // Cooling term slyzmod4
@@ -193,19 +202,338 @@ class CoolingFunction {
       return;
     };
 
+    CoolingFunction(const char* path) {
+      mode  = 1; // WSS09
+      ndens = 41;
+      ntemp = 176;
+      xion_s.NewAthenaArray(ntemp,ndens);
+      xion_0.NewAthenaArray(ntemp,ndens);
+      netcool_z.NewAthenaArray(ntemp,ndens);
+      netcool_0.NewAthenaArray(ntemp,ndens);
+      densarr.NewAthenaArray(ndens);
+      temparr.NewAthenaArray(ntemp);
+      // Read in information from HDF5 file.
+      hid_t fapl, file, obj;
+      herr_t err;
+      hsize_t size;
+      H5O_info_t obj_info;
+      H5G_info_t grp_info;
+      if ((fapl = H5Pcreate(H5P_FILE_ACCESS)) == H5I_INVALID_HID) {
+        std::cout << "Failure creating file access" << std::endl;
+        stop_this();
+      }
+      std::string file_name = path;
+      if ((file = H5Fopen(file_name.c_str(),H5F_ACC_RDONLY,fapl)) == H5I_INVALID_HID) {
+        std::cout << "Failure opening file " << file_name.c_str() << std::endl;
+        stop_this();
+      }
+      H5Fget_filesize(file,&size);
+      if (size < 0) {
+        std::cout << "Failure determining file size" << std::endl;
+        stop_this();
+      }
+      std::cout << "File size = " << size << " bytes" << std::endl;
+
+      // Block Solar. Need density array, temperature array, and ne/nH for solar metallicity.
+      std::string object_name = "/Solar"; // Solar, Metal_free, Total_Metals
+      if (H5Oget_info_by_name(file, object_name.c_str(), &obj_info, H5P_DEFAULT) < 0) {
+        std::cout << "Failure getting info of path " << object_name.c_str() << std::endl;
+        stop_this();
+      }
+      if (obj_info.type != H5O_TYPE_GROUP) {
+       std::cout << "Failure finding Group object." << std::endl;
+       stop_this;
+      }
+      if (H5Gget_info_by_name(file, object_name.c_str(), &grp_info, H5P_DEFAULT) < 0) {
+        std::cout << "Cannot get info about group " << object_name.c_str() << std::endl;
+        stop_this();
+      }
+      std::cout << "Group info:" << std::endl;
+      if (grp_info.storage_type != H5G_STORAGE_TYPE_SYMBOL_TABLE) {
+        std::cout << "Storage type must be Symbol Table" << std::endl;
+        stop_this;
+      }
+      std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
+      // check for fields
+      for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
+        ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
+        char *link_name = new char[++size_l];
+        H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
+        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        delete link_name;
+      }
+      // read fields
+      for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
+        ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
+        char *link_name = new char[++size_l];
+        H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
+        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        if (   (strcmp(link_name,"Temperature_bins")==0)
+            || (strcmp(link_name,"Hydrogen_density_bins")==0)
+            || (strcmp(link_name,"Electron_density_over_n_h")==0)) {
+          std::string path_to_object = object_name.c_str();
+          path_to_object += '/';
+          path_to_object += link_name;
+          obj = H5Oopen(file,path_to_object.c_str(),H5P_DEFAULT);
+          err = H5Oget_info(obj, &obj_info);
+          if (obj_info.type != H5O_TYPE_DATASET) {
+            std::cout << "Expected Dataset." << std::endl;
+            stop_this();
+          }
+          hid_t dataset = H5Dopen(file,path_to_object.c_str(),H5P_DEFAULT);
+          hid_t dataspace  = H5Dget_space(dataset);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
+          int datarank     = H5Sget_simple_extent_ndims(dataspace);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
+          hsize_t dims[H5S_MAX_RANK], maxdim[H5S_MAX_RANK];
+          H5Sget_simple_extent_dims(dataspace, dims, maxdim);
+          hsize_t nelts = 1;
+          for (int ir=0; ir<datarank; ir++) {
+            std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
+            nelts *= dims[ir];
+          }
+          hid_t datatype   = H5Dget_type(dataset);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
+          hid_t dataclass  = H5Tget_class(datatype);
+          std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
+          if (dataclass != H5T_FLOAT) {
+            std::cout << "Expected dataclass H5T_FLOAT." << std::endl;
+            stop_this();
+          }
+          hid_t datanative = H5Tget_native_type(datatype, H5T_DIR_DEFAULT);
+          size_t datasize  = H5Tget_size(datanative);
+          std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
+          float *fbuf = new float[datasize*nelts];
+          H5Dread(dataset, datanative, H5S_ALL, H5S_ALL, H5P_DEFAULT, fbuf);
+          //for (int elt=0; elt<nelts; elt++) {
+          //  std::cout << "        Dataset " << path_to_object.c_str() << " elt " << elt << " = " << fbuf[elt] << std::endl;
+          //}
+          if (strcmp(link_name,"Temperature_bins")==0) {
+            for (int ielt=0; ielt < nelts; ielt++) {
+              temparr(ielt) = (Real) fbuf[ielt];
+            }
+          } else if (strcmp(link_name,"Hydrogen_density_bins")==0) {
+            for (int ielt=0; ielt < nelts; ielt++) {
+              densarr(ielt) = (Real) fbuf[ielt];
+            }
+          } else if (strcmp(link_name,"Electron_density_over_n_h")==0) {
+            for (int ielt=0; ielt < nelts; ielt++) {
+              xion_s(ielt / ndens, ielt % ndens) = (Real) fbuf[ielt];
+            }
+          }
+          delete fbuf;
+          H5Tclose(datanative);
+          H5Tclose(datatype);
+          H5Sclose(dataspace);
+          H5Dclose(dataset);
+          H5Dclose(obj);
+        }
+        delete link_name;
+      }
+      // Block Metal_free. Need Net_Cooling and Electron_density_over_n_h, both at index 1 in first dimension (Y=0.248).
+      object_name = "/Metal_free"; // Solar, Metal_free, Total_Metals
+      if (H5Oget_info_by_name(file, object_name.c_str(), &obj_info, H5P_DEFAULT) < 0) {
+        std::cout << "Failure getting info of path " << object_name.c_str() << std::endl;
+        stop_this();
+      }
+      if (obj_info.type != H5O_TYPE_GROUP) {
+       std::cout << "Failure finding Group object." << std::endl;
+       stop_this;
+      }
+      if (H5Gget_info_by_name(file, object_name.c_str(), &grp_info, H5P_DEFAULT) < 0) {
+        std::cout << "Cannot get info about group " << object_name.c_str() << std::endl;
+        stop_this();
+      }
+      std::cout << "Group info:" << std::endl;
+      if (grp_info.storage_type != H5G_STORAGE_TYPE_SYMBOL_TABLE) {
+        std::cout << "Storage type must be Symbol Table" << std::endl;
+        stop_this;
+      }
+      std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
+      // check for fields
+      for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
+        ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
+        char *link_name = new char[++size_l];
+        H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
+        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        delete link_name;
+      }
+      // read fields
+      for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
+        ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
+        char *link_name = new char[++size_l];
+        H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
+        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        if (   (strcmp(link_name,"Net_Cooling")==0)
+            || (strcmp(link_name,"Electron_density_over_n_h")==0)) {
+          std::string path_to_object = object_name.c_str();
+          path_to_object += '/';
+          path_to_object += link_name;
+          obj = H5Oopen(file,path_to_object.c_str(),H5P_DEFAULT);
+          err = H5Oget_info(obj, &obj_info);
+          if (obj_info.type != H5O_TYPE_DATASET) {
+            std::cout << "Expected Dataset." << std::endl;
+            stop_this();
+          }
+          hid_t dataset = H5Dopen(file,path_to_object.c_str(),H5P_DEFAULT);
+          hid_t dataspace  = H5Dget_space(dataset);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
+          int datarank     = H5Sget_simple_extent_ndims(dataspace);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
+          hsize_t dims[H5S_MAX_RANK], maxdim[H5S_MAX_RANK];
+          H5Sget_simple_extent_dims(dataspace, dims, maxdim);
+          hsize_t nelts = 1;
+          for (int ir=0; ir<datarank; ir++) {
+            std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
+            nelts *= dims[ir];
+          }
+          hid_t datatype   = H5Dget_type(dataset);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
+          hid_t dataclass  = H5Tget_class(datatype);
+          std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
+          if (dataclass != H5T_FLOAT) {
+            std::cout << "Expected dataclass H5T_FLOAT." << std::endl;
+            stop_this();
+          }
+          hid_t datanative = H5Tget_native_type(datatype, H5T_DIR_DEFAULT);
+          size_t datasize  = H5Tget_size(datanative);
+          std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
+          float *fbuf = new float[datasize*nelts];
+          H5Dread(dataset, datanative, H5S_ALL, H5S_ALL, H5P_DEFAULT, fbuf);
+          //for (int elt=0; elt<nelts; elt++) {
+          //  std::cout << "        Dataset " << path_to_object.c_str() << " elt " << elt << " = " << fbuf[elt] << std::endl;
+          //}
+          if (strcmp(link_name,"Net_Cooling")==0) {
+            for (int ielt=0; ielt < nelts/7; ielt++) { // not nice, but read a 7th of the data set (just one He fraction)
+              netcool_0(ielt / ndens, ielt % ndens) = (Real) fbuf[ntemp*ndens + ielt]; // index 1 in He fraction is offset by 1 (n,T) block.
+            }
+          } else if (strcmp(link_name,"Electron_density_over_n_h")==0) {
+            for (int ielt=0; ielt < nelts/7; ielt++) {
+              xion_0(ielt / ndens, ielt % ndens) = (Real) fbuf[ntemp*ndens + ielt];
+            }
+          }
+          delete fbuf;
+          H5Tclose(datanative);
+          H5Tclose(datatype);
+          H5Sclose(dataspace);
+          H5Dclose(dataset);
+          H5Dclose(obj);
+        }
+        delete link_name;
+      }
+      // Block Total_Metals. Need Net_cooling.
+      object_name = "/Total_Metals"; // Solar, Metal_free, Total_Metals
+      if (H5Oget_info_by_name(file, object_name.c_str(), &obj_info, H5P_DEFAULT) < 0) {
+        std::cout << "Failure getting info of path " << object_name.c_str() << std::endl;
+        stop_this();
+      }
+      if (obj_info.type != H5O_TYPE_GROUP) {
+       std::cout << "Failure finding Group object." << std::endl;
+       stop_this;
+      }
+      if (H5Gget_info_by_name(file, object_name.c_str(), &grp_info, H5P_DEFAULT) < 0) {
+        std::cout << "Cannot get info about group " << object_name.c_str() << std::endl;
+        stop_this();
+      }
+      std::cout << "Group info:" << std::endl;
+      if (grp_info.storage_type != H5G_STORAGE_TYPE_SYMBOL_TABLE) {
+        std::cout << "Storage type must be Symbol Table" << std::endl;
+        stop_this;
+      }
+      std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
+      // check for fields
+      for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
+        ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
+        char *link_name = new char[++size_l];
+        H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
+        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        delete link_name;
+      }
+      // read fields
+      for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
+        ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
+        char *link_name = new char[++size_l];
+        H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
+        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        if (strcmp(link_name,"Net_cooling")==0) {
+          std::string path_to_object = object_name.c_str();
+          path_to_object += '/';
+          path_to_object += link_name;
+          obj = H5Oopen(file,path_to_object.c_str(),H5P_DEFAULT);
+          err = H5Oget_info(obj, &obj_info);
+          if (obj_info.type != H5O_TYPE_DATASET) {
+            std::cout << "Expected Dataset." << std::endl;
+            stop_this();
+          }
+          hid_t dataset = H5Dopen(file,path_to_object.c_str(),H5P_DEFAULT);
+          hid_t dataspace  = H5Dget_space(dataset);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
+          int datarank     = H5Sget_simple_extent_ndims(dataspace);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
+          hsize_t dims[H5S_MAX_RANK], maxdim[H5S_MAX_RANK];
+          H5Sget_simple_extent_dims(dataspace, dims, maxdim);
+          hsize_t nelts = 1;
+          for (int ir=0; ir<datarank; ir++) {
+            std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
+            nelts *= dims[ir];
+          }
+          hid_t datatype   = H5Dget_type(dataset);
+          std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
+          hid_t dataclass  = H5Tget_class(datatype);
+          std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
+          if (dataclass != H5T_FLOAT) {
+            std::cout << "Expected dataclass H5T_FLOAT." << std::endl;
+            stop_this();
+          }
+          hid_t datanative = H5Tget_native_type(datatype, H5T_DIR_DEFAULT);
+          size_t datasize  = H5Tget_size(datanative);
+          std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
+          //float *fbuf = (float *) malloc((size_t)(elements*datasize));
+          float *fbuf = new float[datasize*nelts];
+          H5Dread(dataset, datanative, H5S_ALL, H5S_ALL, H5P_DEFAULT, fbuf);
+          //for (int elt=0; elt<nelts; elt++) {
+          //  std::cout << "        Dataset " << path_to_object.c_str() << " elt " << elt << " = " << fbuf[elt] << std::endl;
+          //}
+          if (strcmp(link_name,"Net_cooling")==0) {
+            for (int ielt=0; ielt < nelts; ielt++) {
+              netcool_z(ielt / ndens, ielt % ndens) = (Real) fbuf[ielt];
+            }
+          }
+          delete fbuf;
+          H5Tclose(datanative);
+          H5Tclose(datatype);
+          H5Sclose(dataspace);
+          H5Dclose(dataset);
+          H5Dclose(obj);
+        }
+        delete link_name;
+      }
+      H5Fclose(file);
+      H5Pclose(fapl);
+    }
+
     // Destructor
     ~CoolingFunction () {
-      if (nccoeff > 0) {
-        cexpo.DeleteAthenaArray();
-        trangec.DeleteAthenaArray();
-        lccoeff.DeleteAthenaArray();
-        ltrangec.DeleteAthenaArray();
-      }
-      if (nhcoeff > 0) {
-        hexpo.DeleteAthenaArray();
-        trangeh.DeleteAthenaArray();
-        lhcoeff.DeleteAthenaArray();
-        ltrangeh.DeleteAthenaArray();
+      if (mode == 0) {
+        if (nccoeff > 0) {
+          cexpo.DeleteAthenaArray();
+          trangec.DeleteAthenaArray();
+          lccoeff.DeleteAthenaArray();
+          ltrangec.DeleteAthenaArray();
+        }
+        if (nhcoeff > 0) {
+          hexpo.DeleteAthenaArray();
+          trangeh.DeleteAthenaArray();
+          lhcoeff.DeleteAthenaArray();
+          ltrangeh.DeleteAthenaArray();
+        }
+      } else if (mode == 1) {
+        xion_s.DeleteAthenaArray();
+        xion_0.DeleteAthenaArray();
+        netcool_z.DeleteAthenaArray();
+        netcool_0.DeleteAthenaArray();
+        densarr.DeleteAthenaArray();
+        temparr.DeleteAthenaArray();
       }
       return;
     };
@@ -236,12 +564,49 @@ class CoolingFunction {
       }
     };
 
-    Real HeatCoolFunc(const Real dens, const Real temp) {
-      Real gamma  = EvalGain(temp);
-      Real lambda = EvalLoss(temp);
-      Real dedt = (gamma-dens*lambda)*fac;
-      return dedt;
+    Real HeatCoolFunc(const Real dens, const Real temp, const Real zmet) {
+      if (mode == 0) { // piece-wise power law
+        Real gamma  = EvalGain(temp);
+        Real lambda = EvalLoss(temp);
+        Real dedt = (gamma-dens*lambda)*fac;
+        return dedt;
+      } else if (mode == 1) { // WSS09
+        int idens,itemp;
+        Real dedt,wd,wt,owd,owt,lambda,lambda_0,lambda_z,xe_0,xe_s;
+        // need to interpolate in density and temperature first.
+        idens = (int) std::floor(ndens*std::log10(dens/densarr(0))/std::log10(densarr(ndens-1)/densarr(0)));
+        idens = (idens < 0 ? 0 : idens);
+        idens = (idens > ndens-1 ? ndens-1 : idens);
+        wd    = (dens-densarr(idens))/(densarr(idens+1)-densarr(idens));
+        owd   = 1.0-wd;
+        itemp = (int) std::floor(ntemp*std::log10(temp/temparr(0))/std::log10(temparr(ntemp-1)/temparr(0)));
+        itemp = (itemp < 0 ? 0 : itemp);
+        itemp = (itemp > ntemp-1 ? ntemp-1 : itemp);
+        wt    = (temp-temparr(itemp))/(temparr(itemp+1)-temparr(itemp));
+        owt   = 1.0-wt;
+        // calculate lambda. 
+        lambda_0 =   netcool_0(itemp  ,idens  )*owt*owd
+                   + netcool_0(itemp  ,idens+1)*owt* wd
+                   + netcool_0(itemp+1,idens  )* wt*owd
+                   + netcool_0(itemp+1,idens+1)* wt* wd;
+        lambda_z =   netcool_z(itemp  ,idens  )*owt*owd
+                   + netcool_z(itemp  ,idens+1)*owt* wd
+                   + netcool_z(itemp+1,idens  )* wt*owd
+                   + netcool_z(itemp+1,idens+1)* wt* wd;
+        xe_0 =       xion_0   (itemp  ,idens  )*owt*owd
+                   + xion_0   (itemp  ,idens+1)*owt* wd
+                   + xion_0   (itemp+1,idens  )* wt*owd
+                   + xion_0   (itemp+1,idens+1)* wt* wd;
+        xe_s =       xion_s   (itemp  ,idens  )*owt*owd
+                   + xion_s   (itemp  ,idens+1)*owt* wd
+                   + xion_s   (itemp+1,idens  )* wt*owd
+                   + xion_s   (itemp+1,idens+1)* wt* wd;
+        lambda = lambda_0 + lambda_z* (xe_0/xe_s)*zmet;
+        dedt   = -dens*lambda*fac; // cooling is positive in WSS09
+        return dedt;
+      }
     };
+
 
     //========================================================================================
     // Real RootFunc(const Real dens, const Real temp0, const Real, temp1, const Real dt)
@@ -250,19 +615,19 @@ class CoolingFunction {
     //   As long as dt is limited to a fraction of dtcool (see HeatCool), the implicit solution
     //   prevents under- or over-shoots.
     //========================================================================================
-    Real RootFunc(const Real dens, const Real temp0, const Real temp1, const Real dt) {
-      return temp0 + dt*gm1*HeatCoolFunc(dens,temp1) - temp1;
+    Real RootFunc(const Real dens, const Real temp0, const Real temp1, const Real dt, const Real zmet) {
+      return temp0 + dt*gm1*HeatCoolFunc(dens,temp1,zmet) - temp1;
     };
 
     //========================================================================================
     // Real BracketRoot(const Real temp0, const Real dt)
     //========================================================================================
-    Real BracketRoot(const Real dens, const Real temp0, const Real dt) {
-      Real rf    = RootFunc(dens,temp0,temp0,dt);
+    Real BracketRoot(const Real dens, const Real temp0, const Real dt, const Real zmet) {
+      Real rf    = RootFunc(dens,temp0,temp0,dt,zmet);
       Real sig   = (Real) ((rf > 0) - (rf < 0));
       Real fac   = 1.0 + sig*0.1;
       Real temp1 = temp0;
-      while (rf*RootFunc(dens,temp0,temp1,dt) > 0)
+      while (rf*RootFunc(dens,temp0,temp1,dt,zmet) > 0)
         temp1 *= fac;
       return temp1;
     };
@@ -271,8 +636,8 @@ class CoolingFunction {
     // Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt)
     // \brief Finds root for RootFunc via bisection. Version without if-statements.
     //========================================================================================
-    Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt) {
-      if (HeatCoolFunc(dens,temp0) == 0.0) return temp0; // Nothing to do for thermal equilibrium
+    Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt, const Real zmet) {
+      if (HeatCoolFunc(dens,temp0,zmet) == 0.0) return temp0; // Nothing to do for thermal equilibrium
       // Otherwise, temp1 and temp0 bracket the temperature down to which we should integrate.
       const Real tol = 1e-6;
       int nit = (int) (log(fabs(temp1-temp0)/tol)/log(2.0));
@@ -280,14 +645,14 @@ class CoolingFunction {
       T[0]         = temp0;
       T[1]         = temp1;
       T[2]         = 0.5*(T[0]+T[1]);
-      L[0]         = RootFunc(dens,temp0,T[0],dt);
-      L[1]         = RootFunc(dens,temp0,T[2],dt);
+      L[0]         = RootFunc(dens,temp0,T[0],dt,zmet);
+      L[1]         = RootFunc(dens,temp0,T[2],dt,zmet);
       for (int i=0; i<nit; i++) {
         int w = (L[0]*L[1] < 0); // 0 if >0, 1 if <= 0
         T[w]  = T[2];
         L[w]  = L[1];
         T[2]  = 0.5*(T[0]+T[1]);
-        L[1]  = RootFunc(dens,temp0,T[2],dt);
+        L[1]  = RootFunc(dens,temp0,T[2],dt,zmet);
       }
       return T[2];
     };
@@ -297,36 +662,36 @@ class CoolingFunction {
     // \brief Finds equilibrium temperature for cooling curve with equilibrium.
     //   Contains bracketing step as well. Assumes that new temperature < temp0.
     //========================================================================================
-    Real GetEquiTemp(const Real dens, const Real temp0) {
+    Real GetEquiTemp(const Real dens, const Real temp0, const Real zmet) {
       Real T[3], L[2];
       Real fac, sig;
       const Real tol = 1e-6;
       int nit;
-      L[0] = HeatCoolFunc(dens,temp0);
+      L[0] = HeatCoolFunc(dens,temp0,zmet);
       if (L[0] == 0.0) return temp0;
       // bracket
       sig  = SIGN(L[0]);
       fac  = 1.0 + sig*0.1;
       T[0] = temp0;
       T[1] = fac*T[0];
-      L[1] = HeatCoolFunc(dens,T[1]);
+      L[1] = HeatCoolFunc(dens,T[1],zmet);
       while (L[0]*L[1] > 0.0) {
         T[0] = T[1];
         T[1] = fac*T[0];
         L[0] = L[1];
-        L[1] = HeatCoolFunc(dens,T[1]);
+        L[1] = HeatCoolFunc(dens,T[1],zmet);
       }
       // root
       nit = (int) (log(fabs(T[1]-T[0])/tol)/log(2.0));
       T[2] = 0.5*(T[0]+T[1]);
-      L[0] = HeatCoolFunc(dens,T[0]);
-      L[1] = HeatCoolFunc(dens,T[2]);
+      L[0] = HeatCoolFunc(dens,T[0],zmet);
+      L[1] = HeatCoolFunc(dens,T[2],zmet);
       for (int i=0; i<nit; i++) {
         int w = (L[0]*L[1] < 0); // 0 if >0, 1 if <= 0
         T[w]  = T[2];
         L[w]  = L[1];
         T[2]  = 0.5*(T[0]+T[1]);
-        L[1]  = HeatCoolFunc(dens,T[2]);
+        L[1]  = HeatCoolFunc(dens,T[2],zmet);
       }
       return T[2];
     };
@@ -376,13 +741,14 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
-  int iprob,icool;
+  int iprob,icool,coolmode;
   Real x0, y0, z0, x1min, x1max;
   std::stringstream msg;
   Real avg[2], my_avg[2];
 
   iprob    = pin->GetInteger("problem","iprob"); // 0: constant density, 1: gaussian perturbation
   icool    = pin->GetInteger("problem","icool"); // 0: no cooling, 1: slyzmod4, 2: slyz. Negative icool: no heating
+  coolmode = pin->GetInteger("problem","coolmode"); // -1: no cooling, 0: Slyz, 1: WSS09
   n0       = pin->GetReal("problem","n0"); // background density
   T0       = pin->GetReal("problem","T0"); // background temperature
   v0       = pin->GetOrAddReal("problem","v0",0.0); // wind x-velocity
@@ -393,13 +759,18 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   x1max    = pin->GetReal("mesh","x1max"); 
   ipot     = pin->GetInteger("problem","ipot");
   mpot     = pin->GetOrAddReal("problem","mpot",1e10);
+  zmet0    = pin->GetOrAddReal("problem","zmet0",1e-2); // metallicity - can be replaced later. Needed for WSS09-cooling.
   if (ipot == 2) {
     potrat = pin->GetReal("problem","potrat"); 
   }
 
   // cooling function
-  if (icool != 0) 
-    pcoolfunc= new CoolingFunction(icool);
+  if (coolmode == 0) {
+    if (icool != 0) 
+      pcoolfunc= new CoolingFunction(icool);
+  } else if (coolmode == 1) {
+    pcoolfunc = new CoolingFunction("./z_0.000.hdf5"); 
+  }
 
   // test for cooling function
   if (iprob == -1) { 
@@ -426,8 +797,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   // Constant density with x-velocity wind
   if (iprob == 0) { 
-    if (icool > 0) {
-      T0 = pcoolfunc->GetEquiTemp(n0,1e7);
+    if ((coolmode == 0) && (icool > 0)) {
+      T0 = pcoolfunc->GetEquiTemp(n0,1e7,0.0);
       if (Globals::my_rank == 0)  
         fprintf(stdout,"[dwarfwake]: Reset T0 = %13.5e as thermal equilibrium temperature\n",T0);
     }
@@ -443,6 +814,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
                                                   +SQR(phydro->u(IM3,k,j,i)))
                                                 /phydro->u(IDN,k,j,i);
           phydro->u(IIE,k,j,i) = n0*T0/gm1;
+          phydro->u(NHYDRO-NSCALARS,k,j,i) = zmet0*n0; // can replace by metallicity profile later
         }
       }
     } 
@@ -502,7 +874,7 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
 {
   Real g1  = pmb->peos->GetGamma()-1.0;
 
-  AthenaArray<Real> dens, temp0, temp1, temp2, dener, dtcool, edot, sign;
+  AthenaArray<Real> dens, temp0, temp1, temp2, dener, dtcool, edot, sign,zmet;
   dens.NewAthenaArray(prim.GetDim1());
   temp0.NewAthenaArray(prim.GetDim1());
   temp1.NewAthenaArray(prim.GetDim1());
@@ -511,6 +883,7 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
   dtcool.NewAthenaArray(prim.GetDim1());
   edot.NewAthenaArray(prim.GetDim1());
   sign.NewAthenaArray(prim.GetDim1());
+  zmet.NewAthenaArray(prim.GetDim1());
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     Real x32 = SQR(pmb->pcoord->x3v(k));
@@ -520,6 +893,7 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         dens(i)  = prim(IDN,k,j,i);
         temp0(i) = prim(IGE,k,j,i)/dens(i); // IGE is pressure
+        zmet(i)  = prim(NHYDRO-NSCALARS,k,j,i); // metallicity
       }
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         if (temp0(i) <= 0.0) {
@@ -532,8 +906,8 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
         }
       }
       for (int i=pmb->is; i<=pmb->ie; ++i) {
-        temp1(i) = pcoolfunc->BracketRoot(dens(i),temp0(i),dt);
-        temp2(i) = pcoolfunc->FindRoot(dens(i),temp0(i),temp1(i),dt);
+        temp1(i) = pcoolfunc->BracketRoot(dens(i),temp0(i),dt,zmet(i));
+        temp2(i) = pcoolfunc->FindRoot(dens(i),temp0(i),temp1(i),dt,zmet(i));
       }
 #pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
@@ -551,6 +925,7 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
   dtcool.DeleteAthenaArray();
   edot.DeleteAthenaArray();
   sign.DeleteAthenaArray();
+  zmet.DeleteAthenaArray();
   
   return;
 } 
@@ -566,10 +941,11 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
   Real g1     = pmb->peos->GetGamma()-1.0;
   Real dtcool = HUGE_NUMBER;// allows it to grow
 
-  AthenaArray<Real> dens, temp0, w;
+  AthenaArray<Real> dens, temp0, w, zmet;
   w.InitWithShallowCopy(pmb->phydro->w);
   dens.NewAthenaArray(w.GetDim1());
   temp0.NewAthenaArray(w.GetDim1());
+  zmet.NewAthenaArray(w.GetDim1());
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     for (int j=pmb->js; j<=pmb->je; ++j) {
@@ -577,9 +953,10 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         dens(i)  = w(IDN,k,j,i);
         temp0(i) = w(IGE,k,j,i)/dens(i); // IGE is pressure
+        zmet(i)  = w(NHYDRO-NSCALARS,k,j,i); 
       }
       for (int i=pmb->is; i<=pmb->ie; ++i) {
-        Real dttemp   = coolsafe*temp0(i)/(fabs(pcoolfunc->HeatCoolFunc(dens(i),temp0(i)))+1e-60);
+        Real dttemp   = coolsafe*temp0(i)/(fabs(pcoolfunc->HeatCoolFunc(dens(i),temp0(i),zmet(i)))+1e-60);
         if (TIMESTEPINFO_ENABLED) {
           if (dttemp < dtcool) {
             pmb->all_min_dts(8)   = dttemp;
@@ -597,6 +974,7 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
   }
   dens.DeleteAthenaArray();
   temp0.DeleteAthenaArray();
+  zmet.DeleteAthenaArray();
 
   return dtcool;
 }
@@ -624,6 +1002,7 @@ void InflowBoundary(MeshBlock *pmb, Coordinates *pcoord, AthenaArray<Real> &prim
         prim(IVY,k,j,i) = 0.0;
         prim(IVZ,k,j,i) = 0.0;
         prim(IGE,k,j,i) = n0*T0;
+        prim(NHYDRO-NSCALARS,k,j,i) = zmet0;
       }
     }
   }

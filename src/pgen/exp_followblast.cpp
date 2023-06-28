@@ -8,6 +8,8 @@
 //  Check UpdateGridData for examples of shell tracking.
 //
 
+//#define DEBUG
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -128,6 +130,13 @@ Real WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> grid
       else retVal = gridData(2) * (myX-gridData(0))/(gridData(3)-gridData(0));
     } 
   }
+
+#ifdef DEBUG
+  if ((i>=6) && (i<=7)) { 
+    fprintf(stdout,"[WallVel]: i=%2i dir=%1i t=%11.3e xf=%11.3e wallvel=%11.3e\n",
+            i,dir,time,xf,retVal);
+  }
+#endif
 
   return retVal; 
 }

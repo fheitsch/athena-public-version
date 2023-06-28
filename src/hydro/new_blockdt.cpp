@@ -251,8 +251,8 @@ Real Hydro::NewBlockTimeStep(void) {
 
   //fprintf(stdout,"[NewBlockTimeStep]: min_dt after  = %13.5e\n",min_dt);
 
-  fprintf(stdout,"[new_block_dt]: WARNING WARNING WARNING: timestep set to 1e-2\n");
-  min_dt = 1e-2;
+  //fprintf(stdout,"[new_block_dt]: WARNING WARNING WARNING: timestep set to 1e-2\n");
+  //min_dt = 1e-2;
   pmb->new_block_dt=min_dt;
 
   return min_dt;

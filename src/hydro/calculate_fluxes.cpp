@@ -93,7 +93,9 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
   // compute fluxes, store directly into 3D arrays
   // x1flux(IBY) = (v1*b2 - v2*b1) = -EMFZ
   // x1flux(IBZ) = (v1*b3 - v3*b1) =  EMFY
+
   RiemannSolver(kl,ku,jl,ju,is,ie+1,IVX,b1,wl,wr,x1flux,e3x1,e2x1);
+
   // compute weights for GS07 CT algorithm
   if (MAGNETIC_FIELDS_ENABLED) {
     for (int k=kl; k<=ku; ++k) {
@@ -104,6 +106,7 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
 #pragma omp simd
         for (int i=is; i<=ie+1; ++i) {
           Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x1flux(IDN,k,j,i)-e1flux(IDN,k,j,i))
+          //Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x1flux(IDN,k,j,i))
                         / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
           Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
           w_x1f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
@@ -159,6 +162,7 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
 #pragma omp simd
           for (int i=il; i<=iu; ++i) {
             Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x2flux(IDN,k,j,i)-e2flux(IDN,k,j,i))
+            //Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x2flux(IDN,k,j,i))
                           / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
             Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
             w_x2f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
@@ -209,6 +213,7 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
 #pragma omp simd
           for (int i=il; i<=iu; ++i) {
             Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x3flux(IDN,k,j,i)-e3flux(IDN,k,j,i))
+            //Real v_over_c = (1024.0)*(pmb->pmy_mesh->dt)*(x3flux(IDN,k,j,i))
                           / (dxw(i)*(wl(IDN,k,j,i) + wr(IDN,k,j,i)));
             Real tmp_min = std::min(static_cast<Real>(0.5),v_over_c);
             w_x3f(k,j,i) = 0.5 + std::max(static_cast<Real>(-0.5),tmp_min);
