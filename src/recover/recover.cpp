@@ -189,25 +189,29 @@ void Recover::Initialize(MeshBlock *pmb) {
 // \brief: Checks grid owned by pmb for invalid values.
 //   Called by Mesh::CheckAndReset()
 //   Assumes that primitive and conservative variables are fully updated.
-//   Uses std::isnormal to check for 0, NaN, +-Inf, < DBL_MIN
 bool Recover::Check(MeshBlock *pmb) {
 
   bool failed = false;
 
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
-#pragma omp simd
       for (int i=is; i<=ie; ++i) {
         Real dens = pmb->phydro->u(IDN,k,j,i);
         Real etot = pmb->phydro->u(IEN,k,j,i);
-        failed = (failed || (dens < 0.0) || (!(std::isnormal(dens)))
-                         || (etot < 0.0) || (!(std::isnormal(etot))));
+        Real mom1 = pmb->phydro->u(IM1,k,j,i);
+        Real mom2 = pmb->phydro->u(IM2,k,j,i);
+        Real mom3 = pmb->phydro->u(IM3,k,j,i);
+        failed = (failed || (dens <= 0.0) || std::isinf(dens) || std::isnan(dens)
+                         ||                  std::isinf(mom1) || std::isnan(mom1)
+                         ||                  std::isinf(mom2) || std::isnan(mom2)
+                         ||                  std::isinf(mom3) || std::isnan(mom3)
+                         || (etot <= 0.0) || std::isinf(etot) || std::isnan(etot));
         if (DUAL_ENERGY) {
           Real eint = pmb->phydro->u(IIE,k,j,i);
-          failed = (failed || (eint < 0.0) || (!(std::isnormal(eint))));
+          failed = (failed || (eint <= 0.0) || std::isinf(eint) || std::isnan(eint));
         } else {
           Real prss = pmb->phydro->w(IPR,k,j,i); 
-          failed = (failed || (prss < 0.0) || (!(std::isnormal(prss))));
+          failed = (failed || (prss <= 0.0) || std::isinf(prss) || std::isnan(prss));
         }
       }
     }

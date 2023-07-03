@@ -80,15 +80,15 @@ void Hydro::SyncEint(AthenaArray<Real> &u) {
         emax = u(IEN,ks,j,i); 
 				
         // Can't do this with for-loop bc of pragma directive
-        emax = std::max(emax,u(IEN,ks,std::max(js,j-1),std::max(is,i-1)));
-        emax = std::max(emax,u(IEN,ks,std::max(js,j-1),            i   ));
-        emax = std::max(emax,u(IEN,ks,std::max(js,j-1),std::min(ie,i+1)));
-        emax = std::max(emax,u(IEN,ks,            j   ,std::max(is,i-1)));
-        emax = std::max(emax,u(IEN,ks,            j   ,            i   ));
-        emax = std::max(emax,u(IEN,ks,            j   ,std::min(ie,i+1)));
-        emax = std::max(emax,u(IEN,ks,std::min(je,j+1),std::max(is,i-1)));
-        emax = std::max(emax,u(IEN,ks,std::min(je,j+1),            i   ));
-        emax = std::max(emax,u(IEN,ks,std::min(je,j+1),std::min(ie,i+1)));
+        emax = std::max(emax,u(IEN,ks,j-1,i-1));
+        emax = std::max(emax,u(IEN,ks,j-1,i  ));
+        emax = std::max(emax,u(IEN,ks,j-1,i+1));
+        emax = std::max(emax,u(IEN,ks,j  ,i-1));
+        emax = std::max(emax,u(IEN,ks,j  ,i  ));
+        emax = std::max(emax,u(IEN,ks,j  ,i+1));
+        emax = std::max(emax,u(IEN,ks,j+1,i-1));
+        emax = std::max(emax,u(IEN,ks,j+1,i  ));
+        emax = std::max(emax,u(IEN,ks,j+1,i+1));
 				
         if ((eint/emax > i2) && (eint > 0.0)) {
         //std::cout << "[SyncEint]: k " << ks << " j " << j  << " i "  << i << " eint=" << eint
@@ -115,11 +115,11 @@ void Hydro::SyncEint(AthenaArray<Real> &u) {
           eint = u(IEN,k,j,i) - ekin - emag;
           emax = u(IEN,k,j,i); 
           for (int kk=-1; kk<=1; kk++) {
-            int k1 = std::min(std::max(ks,k+kk),ke);
+            int k1 = k+kk;
             for (int jj=-1; jj<=1; jj++) {
-              int j1 = std::min(std::max(js,j+jj),je);
+              int j1 = j+jj;
               for (int ii=-1; ii<=1; ii++) {
-                int i1 = std::min(std::max(is,i+ii),ie);
+                int i1 = i+ii;
                 emax = std::max(emax,u(IEN,k1,j1,i1));
               }
             }				

@@ -34,6 +34,10 @@
 #include <mpi.h>
 #endif
 
+#if (NSCALARS != 3)
+#error: Requires NSCALARS == 3
+#endif
+
 // ahead declarations
 
 class CoolingFunction;
@@ -108,9 +112,11 @@ class Parameters {
 //typedef Real (*CoolingFunc_t)(const Real dens, const Real temp); // For generic cooling functions
 
 int nx1, icool, iprof;
-Real x1rat, gam,gm1, fwind, csound2,rmin,vexp;
-Real coolsafe = 0.05;
+Real x1rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool;
+Real coolsafe = 0.05, lengthcool;
 AthenaArray<Real> k1, k2, k3, k4, yarr0, yarr1, ytemp_;
+// scratch arrays for cooling
+//AthenaArray<Real> dens, temp0, temp1, temp2, zmet, dener, dtcool, edot, vtot;
 
 void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
                          const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
@@ -262,6 +268,7 @@ class CoolingFunction {
     Real ltrangec[13];
     // Wiersma+09. "0" is metal-free, "z" is only metals, "s" is solar.
     AthenaArray<Real> xion_0, xion_s, netcool_0, netcool_z, densarr, temparr; 
+    Real log10dens, log10temp;
     int ndens=-1, ntemp=-1;
 
   public:
@@ -307,7 +314,7 @@ class CoolingFunction {
         std::cout << "Failure determining file size" << std::endl;
         stop_this();
       }
-      std::cout << "File size = " << size << " bytes" << std::endl;
+      //std::cout << "File size = " << size << " bytes" << std::endl;
 
       // Block Solar. Need density array, temperature array, and ne/nH for solar metallicity.
       std::string object_name = "/Solar"; // Solar, Metal_free, Total_Metals
@@ -323,18 +330,18 @@ class CoolingFunction {
         std::cout << "Cannot get info about group " << object_name.c_str() << std::endl;
         stop_this();
       }
-      std::cout << "Group info:" << std::endl;
+      //std::cout << "Group info:" << std::endl;
       if (grp_info.storage_type != H5G_STORAGE_TYPE_SYMBOL_TABLE) {
         std::cout << "Storage type must be Symbol Table" << std::endl;
         stop_this;
       }
-      std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
+      //std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
       // check for fields
       for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
         ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
         char *link_name = new char[++size_l];
         H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
-        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        //std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
         delete link_name;
       }
       // read fields
@@ -342,7 +349,7 @@ class CoolingFunction {
         ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
         char *link_name = new char[++size_l];
         H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
-        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        //std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
         if (   (strcmp(link_name,"Temperature_bins")==0) 
             || (strcmp(link_name,"Hydrogen_density_bins")==0)
             || (strcmp(link_name,"Electron_density_over_n_h")==0)) { 
@@ -357,27 +364,27 @@ class CoolingFunction {
           }
           hid_t dataset = H5Dopen(file,path_to_object.c_str(),H5P_DEFAULT);
           hid_t dataspace  = H5Dget_space(dataset);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
           int datarank     = H5Sget_simple_extent_ndims(dataspace);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
           hsize_t dims[H5S_MAX_RANK], maxdim[H5S_MAX_RANK];
           H5Sget_simple_extent_dims(dataspace, dims, maxdim);
           hsize_t nelts = 1;
           for (int ir=0; ir<datarank; ir++) {
-            std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
+            //std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
             nelts *= dims[ir];
           }
           hid_t datatype   = H5Dget_type(dataset);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
           hid_t dataclass  = H5Tget_class(datatype);
-          std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
+          //std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
           if (dataclass != H5T_FLOAT) {
             std::cout << "Expected dataclass H5T_FLOAT." << std::endl;
             stop_this();
           }
           hid_t datanative = H5Tget_native_type(datatype, H5T_DIR_DEFAULT);
           size_t datasize  = H5Tget_size(datanative);
-          std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
+          //std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
           float *fbuf = new float[datasize*nelts];
           H5Dread(dataset, datanative, H5S_ALL, H5S_ALL, H5P_DEFAULT, fbuf);
           //for (int elt=0; elt<nelts; elt++) {
@@ -420,18 +427,18 @@ class CoolingFunction {
         std::cout << "Cannot get info about group " << object_name.c_str() << std::endl;
         stop_this();
       }
-      std::cout << "Group info:" << std::endl;
+      //std::cout << "Group info:" << std::endl;
       if (grp_info.storage_type != H5G_STORAGE_TYPE_SYMBOL_TABLE) {
         std::cout << "Storage type must be Symbol Table" << std::endl;
         stop_this;
       }
-      std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
+      //std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
       // check for fields
       for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
         ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
         char *link_name = new char[++size_l];
         H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
-        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        //std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
         delete link_name;
       }
       // read fields
@@ -439,7 +446,7 @@ class CoolingFunction {
         ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
         char *link_name = new char[++size_l];
         H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
-        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        //std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
         if (   (strcmp(link_name,"Net_Cooling")==0)
             || (strcmp(link_name,"Electron_density_over_n_h")==0)) {
           std::string path_to_object = object_name.c_str();
@@ -453,27 +460,27 @@ class CoolingFunction {
           }
           hid_t dataset = H5Dopen(file,path_to_object.c_str(),H5P_DEFAULT);
           hid_t dataspace  = H5Dget_space(dataset);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
           int datarank     = H5Sget_simple_extent_ndims(dataspace);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
           hsize_t dims[H5S_MAX_RANK], maxdim[H5S_MAX_RANK];
           H5Sget_simple_extent_dims(dataspace, dims, maxdim);
           hsize_t nelts = 1;
           for (int ir=0; ir<datarank; ir++) {
-            std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
+            //std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
             nelts *= dims[ir];
           }
           hid_t datatype   = H5Dget_type(dataset);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
           hid_t dataclass  = H5Tget_class(datatype);
-          std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
+          //std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
           if (dataclass != H5T_FLOAT) {
             std::cout << "Expected dataclass H5T_FLOAT." << std::endl;
             stop_this();
           }
           hid_t datanative = H5Tget_native_type(datatype, H5T_DIR_DEFAULT);
           size_t datasize  = H5Tget_size(datanative);
-          std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
+          //std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
           float *fbuf = new float[datasize*nelts];
           H5Dread(dataset, datanative, H5S_ALL, H5S_ALL, H5P_DEFAULT, fbuf);
           //for (int elt=0; elt<nelts; elt++) {
@@ -493,6 +500,7 @@ class CoolingFunction {
           H5Tclose(datatype);
           H5Sclose(dataspace);
           H5Dclose(dataset);
+          H5Dclose(dataclass);
           H5Dclose(obj);
         }
         delete link_name;
@@ -512,18 +520,18 @@ class CoolingFunction {
         std::cout << "Cannot get info about group " << object_name.c_str() << std::endl;
         stop_this();
       }
-      std::cout << "Group info:" << std::endl;
+      //std::cout << "Group info:" << std::endl;
       if (grp_info.storage_type != H5G_STORAGE_TYPE_SYMBOL_TABLE) {
         std::cout << "Storage type must be Symbol Table" << std::endl;
         stop_this;
       }
-      std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
+      //std::cout << "Link count in HDF5 group " << object_name.c_str() << ": " << grp_info.nlinks << std::endl;
       // check for fields
       for (int ilink=0; ilink<grp_info.nlinks; ilink++) {
         ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
         char *link_name = new char[++size_l];
         H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
-        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        //std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
         delete link_name;
       }
       // read fields
@@ -531,7 +539,7 @@ class CoolingFunction {
         ssize_t size_l = H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, 0, 0, H5P_DEFAULT);
         char *link_name = new char[++size_l];
         H5Lget_name_by_idx(file, object_name.c_str(), H5_INDEX_NAME, H5_ITER_INC, ilink, link_name, size_l, H5P_DEFAULT);
-        std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
+        //std::cout << "    Link " << ilink << ": name   = " << link_name <<  std::endl;
         if (strcmp(link_name,"Net_cooling")==0) {
           std::string path_to_object = object_name.c_str();
           path_to_object += '/';
@@ -544,27 +552,27 @@ class CoolingFunction {
           }
           hid_t dataset = H5Dopen(file,path_to_object.c_str(),H5P_DEFAULT);
           hid_t dataspace  = H5Dget_space(dataset);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has space " << dataspace << std::endl;
           int datarank     = H5Sget_simple_extent_ndims(dataspace);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has rank "  << datarank << std::endl;
           hsize_t dims[H5S_MAX_RANK], maxdim[H5S_MAX_RANK];
           H5Sget_simple_extent_dims(dataspace, dims, maxdim);
           hsize_t nelts = 1;
           for (int ir=0; ir<datarank; ir++) {
-            std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
+            //std::cout << "            dim[" << ir << "] = " << dims[ir] << std::endl;
             nelts *= dims[ir];
           }
           hid_t datatype   = H5Dget_type(dataset);
-          std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
+          //std::cout << "        Dataset " << path_to_object.c_str() << " has type "  << datatype << std::endl;
           hid_t dataclass  = H5Tget_class(datatype);
-          std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
+          //std::cout << "        Datatype " << path_to_object.c_str() << " has class "  << dataclass << std::endl;
           if (dataclass != H5T_FLOAT) {
             std::cout << "Expected dataclass H5T_FLOAT." << std::endl;
             stop_this();
           }
           hid_t datanative = H5Tget_native_type(datatype, H5T_DIR_DEFAULT);
           size_t datasize  = H5Tget_size(datanative);
-          std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
+          //std::cout << "        Datatype " << path_to_object.c_str() << " has size " << datasize << std::endl;
           //float *fbuf = (float *) malloc((size_t)(elements*datasize));
           float *fbuf = new float[datasize*nelts];
           H5Dread(dataset, datanative, H5S_ALL, H5S_ALL, H5P_DEFAULT, fbuf);
@@ -587,6 +595,9 @@ class CoolingFunction {
       }
       H5Fclose(file);
       H5Pclose(fapl);
+
+      log10dens = std::log10(densarr(ndens-1)/densarr(0));
+      log10temp = std::log10(temparr(ntemp-1)/temparr(0));
     }
  
     ~CoolingFunction () {
@@ -625,47 +636,53 @@ class CoolingFunction {
       }
     };
 
-    Real HeatCoolFunc(const Real dens, const Real temp, const Real zmet) {
-      if (mode == 0) { // piece-wise power law
-        Real gamma  = EvalGain(temp);
-        Real lambda = EvalLoss(temp);
-        Real dedt = (gamma-dens*lambda)*fac;
-        return dedt;
-      } else if (mode == 1) { // WSS09
-        int idens,itemp;
-        Real dedt,wd,wt,owd,owt,lambda,lambda_0,lambda_z,xe_0,xe_s;
-        // need to interpolate in density and temperature first.
-        idens = (int) std::floor(ndens*std::log10(dens/densarr(0))/std::log10(densarr(ndens-1)/densarr(0))); 
-        idens = (idens < 0 ? 0 : idens);
-        idens = (idens > ndens-1 ? ndens-1 : idens);
-        wd    = (dens-densarr(idens))/(densarr(idens+1)-densarr(idens));
-        owd   = 1.0-wd;
-        itemp = (int) std::floor(ntemp*std::log10(temp/temparr(0))/std::log10(temparr(ntemp-1)/temparr(0)));
-        itemp = (itemp < 0 ? 0 : itemp);
-        itemp = (itemp > ntemp-1 ? ntemp-1 : itemp);
-        wt    = (temp-temparr(itemp))/(temparr(itemp+1)-temparr(itemp));
-        owt   = 1.0-wt;
-        // calculate lambda. 
-        lambda_0 =   netcool_0(itemp  ,idens  )*owt*owd
-                   + netcool_0(itemp  ,idens+1)*owt* wd
-                   + netcool_0(itemp+1,idens  )* wt*owd
-                   + netcool_0(itemp+1,idens+1)* wt* wd;
-        lambda_z =   netcool_z(itemp  ,idens  )*owt*owd
-                   + netcool_z(itemp  ,idens+1)*owt* wd
-                   + netcool_z(itemp+1,idens  )* wt*owd
-                   + netcool_z(itemp+1,idens+1)* wt* wd;
-        xe_0 =       xion_0   (itemp  ,idens  )*owt*owd
-                   + xion_0   (itemp  ,idens+1)*owt* wd
-                   + xion_0   (itemp+1,idens  )* wt*owd
-                   + xion_0   (itemp+1,idens+1)* wt* wd;
-        xe_s =       xion_s   (itemp  ,idens  )*owt*owd
-                   + xion_s   (itemp  ,idens+1)*owt* wd
-                   + xion_s   (itemp+1,idens  )* wt*owd
-                   + xion_s   (itemp+1,idens+1)* wt* wd;
-        lambda = lambda_0 + lambda_z* (xe_0/xe_s)*zmet;
-        dedt   = -dens*lambda*fac; // cooling is positive in WSS09
-        return dedt;
-      }
+    Real HeatCoolFunc(const Real dens, const Real temp, const Real vtot, const Real zmet) {
+      //if (mode == 0) { // piece-wise power law
+      //  Real gamma  = EvalGain(temp);
+      //  Real lambda = EvalLoss(temp);
+      //  Real dedt = (gamma-dens*lambda)*fac;
+      //  return dedt;
+      //} else if (mode == 1) { // WSS09
+      int idens,itemp,idens1,itemp1;
+      Real dedt,wd,wt,owd,owt,w1,w2,w3,w4,lambda,lambda_0,lambda_z,xe_0,xe_s;
+      // need to interpolate in density and temperature first.
+      idens = (int) std::floor(ndens*std::log10(dens/densarr(0))/log10dens); 
+      idens = (idens < 0 ? 0 : idens);
+      idens = (idens > ndens-1 ? ndens-1 : idens);
+      idens1= idens+1;
+      wd    = (dens-densarr(idens))/(densarr(idens1)-densarr(idens));
+      owd   = 1.0-wd;
+      itemp = (int) std::floor(ntemp*std::log10(temp/temparr(0))/log10temp);
+      itemp = (itemp < 0 ? 0 : itemp);
+      itemp = (itemp > ntemp-1 ? ntemp-1 : itemp);
+      itemp1= itemp+1;
+      wt    = (temp-temparr(itemp))/(temparr(itemp1)-temparr(itemp));
+      owt   = 1.0-wt;
+      w1    = owt*owd;
+      w2    = owt* wd;
+      w3    =  wt*owd;
+      w4    =  wt* wd;
+      // calculate lambda. 
+      lambda_0 =   netcool_0(itemp ,idens )*w1
+                 + netcool_0(itemp ,idens1)*w2
+                 + netcool_0(itemp1,idens )*w3
+                 + netcool_0(itemp1,idens1)*w4;
+      lambda_z =   netcool_z(itemp ,idens )*w1
+                 + netcool_z(itemp ,idens1)*w2
+                 + netcool_z(itemp1,idens )*w3
+                 + netcool_z(itemp1,idens1)*w4;
+      xe_0 =       xion_0   (itemp ,idens )*w1
+                 + xion_0   (itemp ,idens1)*w2
+                 + xion_0   (itemp1,idens )*w3
+                 + xion_0   (itemp1,idens1)*w4;
+      xe_s =       xion_s   (itemp ,idens )*w1
+                 + xion_s   (itemp ,idens1)*w2
+                 + xion_s   (itemp1,idens )*w3
+                 + xion_s   (itemp1,idens1)*w4;
+      lambda = lambda_0 + lambda_z* (xe_0/xe_s)*zmet;
+      dedt   = -dens*lambda*fac + turbcool*dens*SQR(vtot)*vtot/lengthcool; // cooling is positive in WSS09, and turbulent heating rate in code units
+      return dedt;
+      //}
     };
 
     //========================================================================================
@@ -675,19 +692,19 @@ class CoolingFunction {
     //   As long as dt is limited to a fraction of dtcool (see HeatCool), the implicit solution
     //   prevents under- or over-shoots.
     //========================================================================================
-    Real RootFunc(const Real dens, const Real temp0, const Real temp1, const Real dt, const Real zmet) {
-      return temp0 + dt*gm1*HeatCoolFunc(dens,temp1,zmet) - temp1;
+    Real RootFunc(const Real dens, const Real temp0, const Real temp1, const Real vtot, const Real zmet, const Real dt) {
+      return temp0 + dt*gm1*HeatCoolFunc(dens,temp1,vtot,zmet) - temp1;
     };
 
     //========================================================================================
     // Real BracketRoot(const Real temp0, const Real dt)
     //========================================================================================
-    Real BracketRoot(const Real dens, const Real temp0, const Real dt, const Real zmet) {
-      Real rf    = RootFunc(dens,temp0,temp0,dt,zmet);
+    Real BracketRoot(const Real dens, const Real temp0, const Real vtot, const Real zmet, const Real dt) {
+      Real rf    = RootFunc(dens,temp0,temp0,vtot,zmet,dt);
       Real sig   = (Real) ((rf > 0) - (rf < 0));
       Real fac   = 1.0 + sig*0.1;
       Real temp1 = temp0;
-      while (rf*RootFunc(dens,temp0,temp1,dt,zmet) > 0)
+      while (rf*RootFunc(dens,temp0,temp1,vtot,zmet,dt) > 0)
         temp1 *= fac;
       return temp1;
     };
@@ -696,65 +713,27 @@ class CoolingFunction {
     // Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt)
     // \brief Finds root for RootFunc via bisection. Version without if-statements.
     //========================================================================================
-    Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt, const Real zmet) {
-      if (HeatCoolFunc(dens,temp0,zmet) == 0.0) return temp0; // Nothing to do for thermal equilibrium
+    Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real vtot, const Real zmet, const Real dt) {
+      if (HeatCoolFunc(dens,temp0,vtot,zmet) == 0.0) return temp0; // Nothing to do for thermal equilibrium
       // Otherwise, temp1 and temp0 bracket the temperature down to which we should integrate.
-      const Real tol = 1e-6;
-      int nit = (int) (log(fabs(temp1-temp0)/tol)/log(2.0));
+      const Real tol = 1e-9;
+      int nit = (int) (log(fabs((temp1-temp0)/(temp1+temp0))/tol)/log(2.0));
       Real T[3], L[2];
       T[0]         = temp0;
       T[1]         = temp1;
       T[2]         = 0.5*(T[0]+T[1]);
-      L[0]         = RootFunc(dens,temp0,T[0],dt,zmet);
-      L[1]         = RootFunc(dens,temp0,T[2],dt,zmet);
+      L[0]         = RootFunc(dens,temp0,T[0],vtot,zmet,dt);
+      L[1]         = RootFunc(dens,temp0,T[2],vtot,zmet,dt);
       for (int i=0; i<nit; i++) {
         int w = (L[0]*L[1] < 0); // 0 if >0, 1 if <= 0
         T[w]  = T[2];
         L[w]  = L[1];
         T[2]  = 0.5*(T[0]+T[1]);
-        L[1]  = RootFunc(dens,temp0,T[2],dt,zmet);
+        L[1]  = RootFunc(dens,temp0,T[2],vtot,zmet,dt);
       }
       return T[2];
     };
 
-    //========================================================================================
-    // Real GetEquiTemp(const Real dens, const Real temp0)
-    // \brief Finds equilibrium temperature for cooling curve with equilibrium.
-    //   Contains bracketing step as well. Assumes that new temperature < temp0.
-    //========================================================================================
-    Real GetEquiTemp(const Real dens, const Real temp0, const Real zmet) {
-      Real T[3], L[2];
-      Real fac, sig;
-      const Real tol = 1e-6;
-      int nit;
-      L[0] = HeatCoolFunc(dens,temp0,zmet);
-      if (L[0] == 0.0) return temp0;
-      // bracket
-      sig  = SIGN(L[0]); 
-      fac  = 1.0 + sig*0.1;
-      T[0] = temp0;
-      T[1] = fac*T[0];
-      L[1] = HeatCoolFunc(dens,T[1],zmet);
-      while (L[0]*L[1] > 0.0) {
-        T[0] = T[1];
-        T[1] = fac*T[0];
-        L[0] = L[1];
-        L[1] = HeatCoolFunc(dens,T[1],zmet);
-      }
-      // root
-      nit = (int) (log(fabs(T[1]-T[0])/tol)/log(2.0));
-      T[2] = 0.5*(T[0]+T[1]);
-      L[0] = HeatCoolFunc(dens,T[0],zmet);
-      L[1] = HeatCoolFunc(dens,T[2],zmet);
-      for (int i=0; i<nit; i++) {
-        int w = (L[0]*L[1] < 0); // 0 if >0, 1 if <= 0
-        T[w]  = T[2];
-        L[w]  = L[1];
-        T[2]  = 0.5*(T[0]+T[1]);
-        L[1]  = HeatCoolFunc(dens,T[2],zmet);
-      }
-      return T[2];
-    };
 }; // class CoolingFunction
 
 //========================================================================================
@@ -767,64 +746,62 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
               const AthenaArray<Real> &bcc, AthenaArray<Real> &cons)
 {
   Real g1  = pmb->peos->GetGamma()-1.0;
-
-  AthenaArray<Real> dens, temp0, temp1, temp2, zmet, dener, dtcool, edot, sign; 
+  AthenaArray<Real> dens, temp0, zmet, dener, dtcool, edot, vtot;
   dens.NewAthenaArray(prim.GetDim1());
   temp0.NewAthenaArray(prim.GetDim1());
-  temp1.NewAthenaArray(prim.GetDim1());
-  temp2.NewAthenaArray(prim.GetDim1()); 
   zmet.NewAthenaArray(prim.GetDim1());
   dener.NewAthenaArray(prim.GetDim1()); // Delta E by which to change total energy
   dtcool.NewAthenaArray(prim.GetDim1());
   edot.NewAthenaArray(prim.GetDim1());
-  sign.NewAthenaArray(prim.GetDim1());
+  vtot.NewAthenaArray(prim.GetDim1());
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
-    Real x32 = SQR(pmb->pcoord->x3v(k));
     for (int j=pmb->js; j<=pmb->je; ++j) {
-      Real x22 = SQR(pmb->pcoord->x2v(j));
 #pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         dens(i)  = prim(IDN,k,j,i); 
+        vtot(i)  = std::sqrt(  SQR(prim(IVX,k,j,i))
+                             + SQR(prim(IVY,k,j,i))
+                             + SQR(prim(IVZ,k,j,i)));
         if (DUAL_ENERGY) {
-          temp0(i) = prim(IGE,k,j,i)/dens(i); // IGE is pressure
+          temp0(i) = prim(IGE,k,j,i)/prim(IDN,k,j,i); // IGE is pressure
         } else {
-          temp0(i) = prim(IPR,k,j,i)/dens(i);
+          temp0(i) = prim(IPR,k,j,i)/prim(IDN,k,j,i); 
         }
         zmet(i)  = prim(NHYDRO-NSCALARS,k,j,i);
       }
+      //for (int i=pmb->is; i<=pmb->ie; ++i) {
+      //  if (temp0(i) <= 0.0) {
+      //    std::stringstream msg;
+      //    msg << "### FATAL ERROR in galpause.cpp: HeatCool: temp0 <=0" << std::endl
+      //        << "    p=" << std::setw(5) << Globals::my_rank << " i=" << std::setw(5) << i << " j=" << std::setw(5) << j << " k=" << std::setw(5) << k << std::endl
+      //        << "    temp0=" << std::scientific << std::setw(13) << std::setprecision(5) << temp0(i)
+      //        << "    dens=" << std::scientific << std::setw(13) << std::setprecision(5) << dens (i)<< std::endl;
+      //    throw std::runtime_error(msg.str().c_str());
+      //  }
+      //}
+      // Find the temperature change that corresponds to the amount of energy change based on cooling curve at given dt.
+      // Cannot be parallelized because of function calls.
       for (int i=pmb->is; i<=pmb->ie; ++i) {
-        if (temp0(i) <= 0.0) {
-          std::stringstream msg;
-          msg << "### FATAL ERROR in galpause.cpp: HeatCool: temp0 <=0" << std::endl
-              << "    p=" << std::setw(5) << Globals::my_rank << " i=" << std::setw(5) << i << " j=" << std::setw(5) << j << " k=" << std::setw(5) << k << std::endl
-              << "    temp0=" << std::scientific << std::setw(13) << std::setprecision(5) << temp0(i)
-              << "    dens=" << std::scientific << std::setw(13) << std::setprecision(5) << dens (i)<< std::endl;
-          throw std::runtime_error(msg.str().c_str());
-        }
-      }
-      for (int i=pmb->is; i<=pmb->ie; ++i) {
-        temp1(i) = pcoolfunc->BracketRoot(dens(i),temp0(i),dt,zmet(i));
-        temp2(i) = pcoolfunc->FindRoot(dens(i),temp0(i),temp1(i),dt,zmet(i));
+        Real temp1 = pcoolfunc->BracketRoot(dens(i),temp0(i),vtot(i),zmet(i),dt);
+        Real temp2 = pcoolfunc->FindRoot(dens(i),temp0(i),temp1,vtot(i),zmet(i),dt);
+        dener(i)   = dens(i)*(temp2-temp0(i))/g1;
       }
 #pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
-        dener(i)         = dens(i)*(temp2(i)-temp0(i))/g1;
         cons(IEN,k,j,i) += dener(i);
-        if (DUAL_ENERGY)
-          cons(IIE,k,j,i) += dener(i);
+        if (DUAL_ENERGY) cons(IIE,k,j,i) += dener(i);
       }
     }
   }
+
   dens.DeleteAthenaArray();
   temp0.DeleteAthenaArray();
-  temp1.DeleteAthenaArray();
-  temp2.DeleteAthenaArray();
   zmet.DeleteAthenaArray();
-  dener.DeleteAthenaArray();
+  dener.DeleteAthenaArray(); // Delta E by which to change total energy
   dtcool.DeleteAthenaArray();
   edot.DeleteAthenaArray();
-  sign.DeleteAthenaArray();
+  vtot.DeleteAthenaArray();
 
   return;
 }
@@ -840,23 +817,30 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
   Real g1     = pmb->peos->GetGamma()-1.0;
   Real dtcool = HUGE_NUMBER;// allows it to grow
 
-  AthenaArray<Real> dens, temp0, zmet, w;
+  AthenaArray<Real> w, dens, temp0, zmet, vtot;
   w.InitWithShallowCopy(pmb->phydro->w);
   dens.NewAthenaArray(w.GetDim1());
   temp0.NewAthenaArray(w.GetDim1());
   zmet.NewAthenaArray(w.GetDim1());
+  vtot.NewAthenaArray(w.GetDim1());
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     for (int j=pmb->js; j<=pmb->je; ++j) {
 #pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         dens(i)  = w(IDN,k,j,i); 
-        if (DUAL_ENERGY) 
+        vtot(i)  = std::sqrt(  SQR(w(IVX,k,j,i))
+                             + SQR(w(IVY,k,j,i))
+                             + SQR(w(IVZ,k,j,i)));
+        if (DUAL_ENERGY) {
           temp0(i) = w(IGE,k,j,i)/dens(i); // IGE is pressure
+        } else {
+          temp0(i) = w(IPR,k,j,i)/dens(i);
+        }
         zmet(i)  = w(NHYDRO-NSCALARS,k,j,i);
       } 
       for (int i=pmb->is; i<=pmb->ie; ++i) {
-        Real dttemp   = coolsafe*temp0(i)/(fabs(pcoolfunc->HeatCoolFunc(dens(i),temp0(i),zmet(i)))+1e-60);
+        Real dttemp   = coolsafe*temp0(i)/(fabs(pcoolfunc->HeatCoolFunc(dens(i),temp0(i),vtot(i),zmet(i)))+1e-60);
         if (TIMESTEPINFO_ENABLED) {
           if (dttemp < dtcool) {
             pmb->all_min_dts(8)   = dttemp;
@@ -868,13 +852,15 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
             pmb->all_min_ind(8,2) = k;
           }
         }
-        dtcool   = std::min(dtcool,dttemp); // for next, not current timestep. Hence, has to be aggressive.
+        dtcool   = std::min(dtcool,dttemp); 
       }
     }
   }
+
   dens.DeleteAthenaArray();
   temp0.DeleteAthenaArray();
   zmet.DeleteAthenaArray();
+  vtot.DeleteAthenaArray();
 
   return dtcool;
 }
@@ -930,26 +916,20 @@ void UpdateGridData(Mesh *pm) {
   pm->GridData(3) = pm->mesh_size.x1max;
   MeshBlock *pmb = pm->pblock;
   Real myVel = 0.0;
-  Real pos  = 0.0;
   Real cellsize = pm->mesh_size.x1max/pm->mesh_size.nx1;
   Real posUp = 0.2*pm->mesh_size.x1max;
   Real posLow = 0.1*pm->mesh_size.x1max;// - 15.0*cellsize;
-  Real velMax = 0.0, velAve=0.0, vol=0.0;
-  Real pVelMax = 0.0;   
+  Real velAve=0.0, vol=0.0;
   while (pmb != NULL) {
     for (int k=pmb->ks; k<=pmb->ke; ++k) {
       for (int j=pmb->js; j<=pmb->je; ++j) {
         for (int i=pmb->is; i<=pmb->ie; ++i) {
-          pos = pmb->pcoord->x1v(i);
+          Real pos  = pmb->pcoord->x1v(i);
+          Real dvol = pmb->pcoord->GetCellVolume(k,j,i);
           if ((pos<=posUp) && (pos>=posLow)) {
-
-            velMax = std::max( pmb->phydro->u(IM1,k,j,i)/pmb->phydro->u(IDN,k,j,i), velMax);
-            
-            //pVelMax = std::max(std::sqrt( pmb->phydro->u(IEN,k,j,i)/pmb->phydro->u(IDN,k,j,i)), velMax);
-            velAve += pmb->phydro->u(IM1,k,j,i)/pmb->phydro->u(IDN,k,j,i)*pmb->pcoord->GetCellVolume(k,j,i);
-            vol += pmb->pcoord->GetCellVolume(k,j,i);
+            velAve += pmb->phydro->u(IM1,k,j,i)/pmb->phydro->u(IDN,k,j,i)*dvol;
+            vol    += dvol;
           }
-                      
         }
       }
     }
@@ -959,8 +939,6 @@ void UpdateGridData(Mesh *pm) {
   Real arr[2];
   arr[0] = velAve;
   arr[1] = vol;
-  MPI_Allreduce(MPI_IN_PLACE,&velMax,1,MPI_ATHENA_REAL,MPI_MAX,
-                MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE,&arr,2,MPI_ATHENA_REAL,MPI_SUM,
                 MPI_COMM_WORLD);
   velAve = arr[0];
@@ -969,7 +947,6 @@ void UpdateGridData(Mesh *pm) {
 
   velAve = velAve/vol;
     
-  //myVel = std::max(velMax,pVelMax)*(pm->GridData(3)/(posLow));
   myVel = velAve;
   if ((myVel <=0.0)) {
     myVel = 0.0;
@@ -1045,11 +1022,17 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   //   for an expanding grid).
   //========================================================================================
 
-  //if (COORDINATE_SYSTEM != "spherical_polar") {
+  if (COORDINATE_SYSTEM != "spherical_polar") {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in galpause.cpp: coordinate system must be spherical-polar" << std::endl;
+    throw std::runtime_error(msg.str().c_str());
+  }
+
+  //if (!DUAL_ENERGY) {
   //  std::stringstream msg;
-  //  msg << "### FATAL ERROR in galpause.cpp: coordinate system must be spherical-polar" << std::endl;
+  //  msg << "### FATAL ERROR in galpause.cpp: requires DUAL_ENERGY" << std::endl;
   //  throw std::runtime_error(msg.str().c_str());
- // }
+  //}
       
   if (mesh_bcs[INNER_X1] == GetBoundaryFlag("user")) 
     EnrollUserBoundaryFunction(INNER_X1,InnerX1_Wind);
@@ -1127,12 +1110,10 @@ void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
       prim(IVY,ks,js,ie+i) = 0.0;
       prim(IVZ,ks,js,ie+i) = 0.0;
       prim(IPR,ks,js,ie+i) = yarr1(2);
-      if (DUAL_ENERGY)
-        prim(IGE,ks,js,ie+i) = yarr1(2);
-      if (NSCALARS == 2) {
-        prim(NHYDRO-NSCALARS  ,ks,js,ie+i) = 0.1; 
-        prim(NHYDRO-NSCALARS+1,ks,js,ie+i) = 0.0; // ambient
-      }  
+      if (DUAL_ENERGY) prim(IGE,ks,js,ie+i) = yarr1(2);
+      prim(NHYDRO-NSCALARS  ,ks,js,ie+i) = 0.1; // metalicity
+      prim(NHYDRO-NSCALARS+1,ks,js,ie+i) = 0.0; // ambient
+      prim(NHYDRO-NSCALARS+2,ks,js,ie+i) = 1.0; // wind;
       r  = pco->x1v(ie+i);
       dr = pco->x1v(ie+i+1)-pco->x1v(ie+i); 
       for (int l=0; l<3; ++l) yarr0(l) = yarr1(l);
@@ -1149,12 +1130,10 @@ void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
       prim(IVY,ks,js,ie+i) = 0.0;
       prim(IVZ,ks,js,ie+i) = 0.0;
       prim(IPR,ks,js,ie+i) = 1.0;
-      if (DUAL_ENERGY)
-        prim(IGE,ks,js,ie+i) = 1.0;
-      if (NSCALARS == 2) {
-        prim(NHYDRO-NSCALARS  ,ks,js,ie+i) = 0.1;
-        prim(NHYDRO-NSCALARS+1,ks,js,ie+i) = 0.0; // ambient
-      }
+      if (DUAL_ENERGY) prim(IGE,ks,js,ie+i) = 1.0;
+      prim(NHYDRO-NSCALARS  ,ks,js,ie+i) = 0.1; // metalicity
+      prim(NHYDRO-NSCALARS+1,ks,js,ie+i) = 0.0; // ambient
+      prim(NHYDRO-NSCALARS+2,ks,js,ie+i) = 1.0; // wind
     }
     return;
   }
@@ -1166,15 +1145,13 @@ void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
         Real d = HaloProfile(r);
         prim(IDN,k,j,ie+i) = d;
         prim(IPR,k,j,ie+i) = d*pparam->Temp();
-        if (DUAL_ENERGY) 
-          prim(IGE,k,j,ie+i) = d*pparam->Temp();
+        if (DUAL_ENERGY) prim(IGE,k,j,ie+i) = d*pparam->Temp();
         prim(IVX,k,j,ie+i) = 0.0;
         prim(IVY,k,j,ie+i) = 0.0;
         prim(IVZ,k,j,ie+i) = 0.0;
-        if (NSCALARS == 2) {
-          prim(NHYDRO-NSCALARS  ,k,j,ie+i) = 0.1; // wind
-          prim(NHYDRO-NSCALARS+1,k,j,ie+i) = 1.0; // ambient 
-        }
+        prim(NHYDRO-NSCALARS  ,k,j,ie+i) = 0.1; // metalicity
+        prim(NHYDRO-NSCALARS+1,k,j,ie+i) = 1.0; // ambient 
+        prim(NHYDRO-NSCALARS+2,k,j,ie+i) = 0.0; // wind
       }
     }
   } 
@@ -1235,12 +1212,10 @@ void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       prim(IVY,ks,js,is-i) = 0.0;
       prim(IVZ,ks,js,is-i) = 0.0;
       prim(IPR,ks,js,is-i) = yarr1(2);
-      if (DUAL_ENERGY)
-        prim(IGE,ks,js,is-i) = yarr1(2);
-      if (NSCALARS == 2) {
-        prim(NHYDRO-NSCALARS  ,ks,js,is-i) = 1.0;
-        prim(NHYDRO-NSCALARS+1,ks,js,is-i) = 0.0; // ambient
-      }
+      if (DUAL_ENERGY) prim(IGE,ks,js,is-i) = yarr1(2);
+      prim(NHYDRO-NSCALARS  ,ks,js,is-i) = 1.0; // metalicity
+      prim(NHYDRO-NSCALARS+1,ks,js,is-i) = 0.0; // ambient
+      prim(NHYDRO-NSCALARS+2,ks,js,is-i) = 1.0; // wind
       r  = pco->x1v(is-i);
       dr = -(pco->x1v(is-i)-pco->x1v(is-(i+1))); 
       for (int l=0; l<3; ++l) yarr0(l) = yarr1(l);
@@ -1257,12 +1232,10 @@ void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       prim(IVY,ks,js,is-i) = 0.0;
       prim(IVZ,ks,js,is-i) = 0.0;
       prim(IPR,ks,js,is-i) = 1.0;
-      if (DUAL_ENERGY)
-        prim(IGE,ks,js,is-i) = 1.0;
-      if (NSCALARS == 2) {
-        prim(NHYDRO-NSCALARS  ,ks,js,is-i) = 1.0; 
-        prim(NHYDRO-NSCALARS+1,ks,js,is-i) = 0.0; // ambient
-      }
+      if (DUAL_ENERGY) prim(IGE,ks,js,is-i) = 1.0;
+      prim(NHYDRO-NSCALARS  ,ks,js,is-i) = 1.0; // metalicity
+      prim(NHYDRO-NSCALARS+1,ks,js,is-i) = 0.0; // ambient
+      prim(NHYDRO-NSCALARS+2,ks,js,is-i) = 1.0; // wind
     }
     return;
   }
@@ -1270,21 +1243,24 @@ void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
   
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
-#pragma omp simd
+      Real x2 = pco->x2v(j);
+#pragma omp simd 
       for (int i=1; i<=ngh; ++i) {
-        Real r = pco->x1v(is-i);
-        Real d = WindProfile(r);
+        Real r   = pco->x1v(is-i);
+        Real dw  = WindProfile(r);
+        Real da  = HaloProfile(r);
+        Real fjp = 1.0-0.25*(1+std::tanh((x2-acosfwind)/0.02))*(1.0-std::tanh((x2-(PI-acosfwind))/0.02));
+        fjp = ((je==js) || (fwind==1.0)) ? 1.0 : fjp;
+        Real d   = da + (dw-da)*fjp;
         prim(IDN,k,j,is-i) = d;
         prim(IPR,k,j,is-i) = d*pparam->Temp();
-        if (DUAL_ENERGY) 
-          prim(IGE,k,j,is-i) = d*pparam->Temp();
-        prim(IVX,k,j,is-i) = pparam->Vwind();
+        if (DUAL_ENERGY) prim(IGE,k,j,is-i) = d*pparam->Temp();
+        prim(IVX,k,j,is-i) = pparam->Vwind()*fjp;
         prim(IVY,k,j,is-i) = 0.0;
         prim(IVZ,k,j,is-i) = 0.0;
-        if (NSCALARS == 2) {
-          prim(NHYDRO-NSCALARS  ,k,j,is-i) = 1.0; // wind
-          prim(NHYDRO-NSCALARS+1,k,j,is-i) = 0.0; // ambient 
-        }
+        prim(NHYDRO-NSCALARS  ,k,j,is-i) = 0.1+0.9*fjp; // metalicity
+        prim(NHYDRO-NSCALARS+1,k,j,is-i) = 1.0-fjp; // ambient 
+        prim(NHYDRO-NSCALARS+2,k,j,is-i) = fjp; // wind
       }
     }
   }
@@ -1411,8 +1387,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // cooling
   pcoolfunc = new CoolingFunction();
 
-  iprof     = pin->GetOrAddReal("problem","iprof",0); // 0: isothermal, 1: beta-model, 2: NFW
-  icool     = pin->GetOrAddReal("problem","icool",0); // 0: no cooling, 1: power-law cooling, 2: WSS09 cooling
+  iprof     = pin->GetOrAddInteger("problem","iprof",0); // 0: isothermal, 1: beta-model, 2: NFW
+  icool     = pin->GetOrAddInteger("problem","icool",0); // 0: no cooling, 1: power-law cooling, 2: WSS09 cooling
+  turbcool  = pin->GetOrAddReal("problem","turbcool",0.0); // add turbulent heating
   // potential parameters
   Real vesc = pin->GetReal("problem","vesc"); // km/s 
   Real temp = pin->GetReal("problem","temp0");
@@ -1428,11 +1405,15 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   gamma   = peos->GetGamma();
   gm1     = gamma - 1.0;
   csound2 = pparam->Temp();
+  acosfwind = std::acos(1.0-fwind);
 
   if (icool == 1) {
     pcoolfunc = new CoolingFunction();
   } else if (icool == 2) {
     pcoolfunc = new CoolingFunction("/nas/longleaf/home/fheitsch/cooling/hm12/data/z_0.000.hdf5");
+  }
+  if (icool > 0) { // allocate scratch arrays
+    lengthcool = pin->GetOrAddReal("problem","lengthcool",1.13584e3); // set to 10kpc by default
   }
 
   // constant wind test case (compare to analytic steady-state wind solution p55)
@@ -1457,12 +1438,10 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
       phydro->u(IM2,ks,js,i) = 0.0;
       phydro->u(IM3,ks,js,i) = 0.0;
       phydro->u(IEN,ks,js,i) = yarr1(2)/gm1 + 0.5*SQR(phydro->u(IM1,ks,js,i))/phydro->u(IDN,ks,js,i);
-      if (DUAL_ENERGY)
-        phydro->u(IIE,ks,js,i) = yarr1(2)/gm1;
-      if (NSCALARS == 2) {
-        phydro->u(NHYDRO-NSCALARS  ,ks,js,i) = phydro->u(IDN,ks,js,i); // wind
-        phydro->u(NHYDRO-NSCALARS+1,ks,js,i) = 0.0; // ambient
-      }
+      if (DUAL_ENERGY) phydro->u(IIE,ks,js,i) = yarr1(2)/gm1;
+      phydro->u(NHYDRO-NSCALARS  ,ks,js,i) = 0.1*phydro->u(IDN,ks,js,i); // metalicity
+      phydro->u(NHYDRO-NSCALARS+1,ks,js,i) = 0.0; // ambient
+      phydro->u(NHYDRO-NSCALARS+2,ks,js,i) = phydro->u(IDN,ks,js,i);  // wind
       r  = pcoord->x1v(i);
       dr = pcoord->x1v(i+1)-pcoord->x1v(i); 
       for (int l=0; l<3; ++l) yarr0(l) = yarr1(l);
@@ -1479,12 +1458,10 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
       phydro->u(IM2,ks,js,i) = 0.0;
       phydro->u(IM3,ks,js,i) = 0.0;
       phydro->u(IEN,ks,js,i) = 1.0/gm1;
-      if (DUAL_ENERGY)
-        phydro->u(IIE,ks,js,i) = 1.0/gm1;
-      if (NSCALARS == 2) {
-        phydro->u(NHYDRO-NSCALARS  ,ks,js,i) = phydro->u(IDN,ks,js,i); // wind
-        phydro->u(NHYDRO-NSCALARS+1,ks,js,i) = 0.0; // ambient
-      }
+      if (DUAL_ENERGY) phydro->u(IIE,ks,js,i) = 1.0/gm1;
+      phydro->u(NHYDRO-NSCALARS  ,ks,js,i) = 0.1*phydro->u(IDN,ks,js,i); // metalicity
+      phydro->u(NHYDRO-NSCALARS+1,ks,js,i) = 0.0; // ambient
+      phydro->u(NHYDRO-NSCALARS+2,ks,js,i) = phydro->u(IDN,ks,js,i); // wind
     }
     return;
   }
@@ -1504,13 +1481,11 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
                                                                + SQR(phydro->u(IM2,k,j,i))
                                                                + SQR(phydro->u(IM3,k,j,i)))
                                                              / phydro->u(IDN,k,j,i);
-          if (DUAL_ENERGY)
-            phydro->u(IIE,k,j,i) = den*pparam->Temp()/gm1;
+          if (DUAL_ENERGY) phydro->u(IIE,k,j,i) = den*pparam->Temp()/gm1;
         }
-        if (NSCALARS == 2) {
-          phydro->u(NHYDRO-NSCALARS  ,k,j,i) = 0.1*den; // metallicity
-          phydro->u(NHYDRO-NSCALARS+1,k,j,i) = den; // ambient
-        }
+        phydro->u(NHYDRO-NSCALARS  ,k,j,i) = 0.1*den; // metallicity
+        phydro->u(NHYDRO-NSCALARS+1,k,j,i) = den; // ambient
+        phydro->u(NHYDRO-NSCALARS+2,k,j,i) = 0.0; // wind
       }
     }
   }
@@ -1603,13 +1578,15 @@ void Mesh::UserWorkInLoop(void) {
         Real x2  = pmb->pcoord->x2v(j);
         Real xtest = pmb->pcoord->x1f(pmb->is);
         for (int i=pmb->is; i<=pmb->ie; i++) {
+          bool fail =    isnan(pmb->phydro->u(IEN,k,j,i)) 
+                      || isnan(pmb->phydro->u(IDN,k,j,i))
+                      || (pmb->phydro->u(IEN,k,j,i) <= 0.0)
+                      || (pmb->phydro->u(IDN,k,j,i) <= 0.0);
           if (DUAL_ENERGY) {
-            if (   isnan(pmb->phydro->u(IEN,k,j,i)) 
-                || isnan(pmb->phydro->u(IDN,k,j,i))
-                || isnan(pmb->phydro->u(IIE,k,j,i))
-                || (pmb->phydro->u(IEN,k,j,i) <= 0.0) 
-                || (pmb->phydro->u(IDN,k,j,i) <= 0.0)
-                || (pmb->phydro->u(IIE,k,j,i) <= 0.0)) {
+            fail = fail || isnan(pmb->phydro->u(IIE,k,j,i)) || (pmb->phydro->u(IIE,k,j,i) <= 0.0); 
+          }
+          if (fail) {
+            if (DUAL_ENERGY) {
               std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
                         << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
                         << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
@@ -1618,27 +1595,17 @@ void Mesh::UserWorkInLoop(void) {
                         << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
                         << " ei=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IIE,k,j,i)
                         << std::endl;
-              stop_this();
-            } 
-          } else {
-            Real eint = pmb->phydro->u(IEN,k,j,i)-0.5*(SQR(pmb->phydro->u(IM1,k,j,i))+SQR(pmb->phydro->u(IM2,k,j,i))+SQR(pmb->phydro->u(IM3,k,j,i)))
-                                                     /pmb->phydro->u(IDN,k,j,i);
-            if (   isnan(pmb->phydro->u(IEN,k,j,i))
-                || isnan(pmb->phydro->u(IDN,k,j,i))
-                || (pmb->phydro->u(IEN,k,j,i) <= 0.0)
-                || (eint <= 0.0)
-                || (pmb->phydro->u(IDN,k,j,i) <= 0.0)) {
+            } else {
               std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
                         << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
                         << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
                         << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
                         << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
                         << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
-                        << " ei=" << std::scientific << std::setw(11) << std::setprecision(3) << eint
                         << std::endl;
-              stop_this();
             }
-          }
+            if (!(RECOVER_ENABLED)) stop_this();
+          } 
           Real dx1  = pmb->pcoord->dx1f(i);
           Real x1  = pmb->pcoord->x1v(i);
           //fprintf(stdout,"[UserWorkInLoop]: i=%4i xrat=%17.9e dxrat=%17.9e xtest=%17.9e\n",
@@ -1656,9 +1623,7 @@ void Mesh::UserWorkInLoop(void) {
             ener[5] = 0.5*(  SQR(pmb->pfield->b.x1f(k,j,i))
                            + SQR(pmb->pfield->b.x2f(k,j,i)) 
                            + SQR(pmb->pfield->b.x3f(k,j,i)));
-          if (DUAL_ENERGY) {
-            ener[6] = u[IIE];
-          }
+          if (DUAL_ENERGY) ener[6] = u[IIE];
           ener[3] = ener[2]-ener[4]-ener[5];
           for (int q=1; q<nq; q++) {
             qtot[q] += ener[q]*dvol;
@@ -1679,9 +1644,10 @@ void Mesh::UserWorkInLoop(void) {
             trac[1] += (u[IM1]*x1+u[IM2]*x2+u[IM3]*x3)/rad;
           }
           trac[2] += u[IDN]*rad;
+          Real vt   = std::sqrt(SQR(u[IM1])+SQR(u[IM2])+SQR(u[IM3]))/SQR(u[IDN]);
           Real temp = gm1*ener[2]/u[IDN];
           Real zmet = u[NHYDRO-NSCALARS]/u[IDN];
-          lengrat[0] = std::min(lengrat[0],temp*std::sqrt(temp)/(dx1*fabs(pcoolfunc->HeatCoolFunc(u[IDN],temp,zmet)))); // cooling length
+          lengrat[0] = std::min(lengrat[0],temp*std::sqrt(temp)/(dx1*fabs(pcoolfunc->HeatCoolFunc(u[IDN],temp,vt,zmet)))); // cooling length
           lengrat[1] = std::min(lengrat[1],std::sqrt(PI*temp/u[IDN])/dx1); // Jeans length
           //fprintf(stdout,"[UserWorkInLoop]: i=%2i d=%13.5e v=%13.5e e=%13.5e\n",i,u[IDN],u[IM1]/u[IDN],u[IEN]);
         }
@@ -1737,9 +1703,11 @@ void Mesh::UserWorkInLoop(void) {
 
   }
   
-  if (qmin[3] <= 0.0) {
-    std::cout << "[UserWorkInLoop]: eint < 0" << std::endl;
-    stop_this();
+  if (!(RECOVER_ENABLED)) {
+    if (qmin[3] <= 0.0) {
+      std::cout << "[UserWorkInLoop]: eint < 0" << std::endl;
+      stop_this();
+    }
   }
 
   return;

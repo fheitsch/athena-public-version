@@ -2731,13 +2731,13 @@ bool Mesh::CheckAndReset(Mesh *pm) {
     MPI_Allreduce(MPI_IN_PLACE,&failed,1,MPI_C_BOOL,MPI_LOR,MPI_COMM_WORLD);
 #endif
     pmb = pm->pblock;
-    //if (Globals::my_rank==0) {
-    //  if (failed) {
-    //    std::cout << "[Mesh:CheckAndReset]: failed after Allreduce" << std::endl;
-    //  } else {
-    //    std::cout << "[Mesh:CheckAndReset]: all ok after Allreduce" << std::endl; 
-    //  }
-    //}
+    if (Globals::my_rank==0) {
+      if (failed) {
+        std::cout << "[Mesh:CheckAndReset]: failed after Allreduce" << std::endl;
+      } else {
+        std::cout << "[Mesh:CheckAndReset]: all ok after Allreduce" << std::endl; 
+      }
+    }
 
     while (pmb != NULL) { 
       pmb->prec->Reset(pmb,failed); // Reset switches between reset and update

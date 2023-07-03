@@ -421,10 +421,11 @@ int main(int argc, char *argv[]) {
         }
       }
       if (itretry >= pmesh->maxitretry) {
+        pmesh->time = pmesh->tlim; // brute-force of killing job
         std::stringstream msg;
         msg << "### FATAL ERROR in Main" << std::endl
             << "Recover reached maximum number of retries ("
-            << pmesh->maxitretry << ")" << std::endl;
+            << pmesh->maxitretry << "). Last iteration dumped." << std::endl;
         throw std::runtime_error(msg.str().c_str());
       }
 

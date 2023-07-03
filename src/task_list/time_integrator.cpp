@@ -385,8 +385,10 @@ TimeIntegratorTaskList::TimeIntegratorTaskList(ParameterInput *pin, Mesh *pm)
       } else {
         AddTimeIntegratorTask(USERWORK,PHY_BVAL);
       }
-      if (DUAL_ENERGY)
+      if (DUAL_ENERGY) {
+        // this is insufficient. Dual energy requires another call to boundaries. fh230703
         AddTimeIntegratorTask(SYNC_IE, USERWORK); 
+      }
       AddTimeIntegratorTask(NEW_DT,USERWORK);
       if (pm->adaptive==true) {
         AddTimeIntegratorTask(AMR_FLAG,USERWORK);
