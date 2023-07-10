@@ -380,6 +380,8 @@ else:
 #Set Expanding Frame
 if args['exp']:
     definitions['EXPANDING_ENABLED'] = '1'
+    if int(args['nghost']) < 4:
+        raise SystemExit('### CONFIGURE ERROR: Option -exp requires --ng 4')
 else:
     definitions['EXPANDING_ENABLED'] = '0'
 

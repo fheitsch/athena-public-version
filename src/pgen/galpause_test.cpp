@@ -111,7 +111,7 @@ class Parameters {
 
 //typedef Real (*CoolingFunc_t)(const Real dens, const Real temp); // For generic cooling functions
 
-int nx1, icool;
+int nx1, icool, iprof;
 Real x1rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool;
 Real coolsafe = 0.05, lengthcool;
 AthenaArray<Real> k1, k2, k3, k4, yarr0, yarr1, ytemp_;
@@ -124,7 +124,16 @@ Real HeatCoolTimeStep(MeshBlock *pmb);
 //CoolingFunc_t CoolingFunc;
 void GSSAWdydr(const Real r, const AthenaArray<Real> &y, AthenaArray<Real> &dydr);
 void GetSteadyStateAdbWind(const Real r0, const AthenaArray<Real> &y0, const Real dr, AthenaArray<Real> &y);
+Real HaloProfile(const Real r);
+Real BetaProfile(const Real r); // Sets ambient density for beta model
+Real TestProfile(const Real r);
+Real ConstProfile(const Real r);
+Real LinProfile(const Real r);
+Real NFWProfile(const Real r);
+Real WindProfile(const Real r); // Sets wind model.
 Real BetaPotential(const Real x1, const Real x2, const Real x3, const Real time);
+Real LinearPotential(const Real x1, const Real x2, const Real x3, const Real time);
+Real NFWPotential(const Real x1, const Real x2, const Real x3, const Real time);
 void DdensDr(const Real s,  const AthenaArray<Real> &y, AthenaArray<Real> &k);
 
 static void stop_this();
@@ -164,9 +173,77 @@ static void stop_this() {
   throw std::runtime_error(msg.str().c_str());
 }
 
+//========================================================================================
+// Returns the density for the beta model at beta = 0.5
+//========================================================================================
+
+Real HaloProfile(const Real r) {
+  if (iprof == -5) {
+    return BetaProfile(r);
+  } else if ((iprof == -2) || (iprof == -1)) {
+    return TestProfile(r);
+  } else if (iprof == -4) {
+    return LinProfile(r);
+  } else if (iprof == 0) {
+    return ConstProfile(r);
+  } else if (iprof == 1) {
+    return BetaProfile(r);
+  } else if (iprof == 2) {
+    return NFWProfile(r);
+  }
+}
+
+Real BetaProfile(const Real r) {
+  Real n00 = pparam->Dens0();
+  Real nb = n00*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+  //fprintf(stdout,"[BetaProfile]: r=%13.5e n=%13.5e\n",r,nb);
+  return nb;
+}
+
+Real NFWProfile(const Real r) {
+  Real x  = r/pparam->Rscal();
+  Real nr = pparam->Dens0()*std::exp(-pparam->Delphi()*(1.0-std::log(1.0+x)/x));
+  //fprintf(stdout,"[NFWProfile]: r=%13.5e n=%13.5e\n",r,nr);
+  return nr;
+}
+
+Real TestProfile(const Real r) {
+  return pparam->Dens0();
+}
+
+Real LinProfile(const Real r) {
+  Real n;
+  n = pparam->Dens0()*(pparam->X1min()/r);
+  return n;
+}
+
+Real ConstProfile(const Real r) {
+  Real n;
+  n = pparam->Pigm()/pparam->Temp();
+  return n;
+}
+
+Real WindProfile(const Real r) {
+  Real nw;
+  if (iprof <= -2) {
+    nw = pparam->Dens0();
+    //nw = pparam->Mdot()/(4.0*PI*fwind*SQR(r)*pparam->Vwind());
+  } else {
+    nw = pparam->Mdot()/(4.0*PI*fwind*SQR(r)*pparam->Vwind());
+  }
+  //fprintf(stdout,"[WindProfile]: r=%13.5e n=%13.5e\n",r,nw);
+  return nw;
+}
+
 Real BetaPotential(const Real x1, const Real x2, const Real x3, const Real time) {
   Real x   = x1/pparam->Rbeta();
   Real phi = 1.5*pparam->Beta()*pparam->Temp()*std::log(1.0+SQR(x));
+  return phi;
+}
+
+Real NFWPotential(const Real x1, const Real x2, const Real x3, const Real time) {
+  Real  x  = x1/pparam->Rscal(); // assuming spherical coordinates
+  Real phi = pparam->Phi0()*std::log(1.0+x)/x;
   return phi;
 }
 
@@ -881,8 +958,11 @@ void UpdateGridData(Mesh *pm) {
   //Real tref = 0.05*xMax/pparam->Vwind();
   //myVel = std::min(pm->time*pparam->Vwind()/tref,pparam->Vwind());
 
-  pm->GridData(2) = 2.0*myVel;
-  
+  if (iprof <= -2) {
+    pm->GridData(2) = vexp;
+  } else {
+    pm->GridData(2) = 2.0*myVel;
+  }
   //fprintf(stdout,"[UpdateGridData]: vel = %17.9e xmax = %17.9e\n",pm->GridData(2),pm->GridData(3));
   return;
 }
@@ -986,7 +1066,15 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     EnrollUserTimeStepFunction(HeatCoolTimeStep);
   }
 
-  EnrollStaticGravPotFunction(BetaPotential);
+  iprof   = pin->GetOrAddReal("problem","iprof",0); // 0: isothermal, 1: beta-model
+  if ((iprof <= -2) && (iprof >= -5)) {
+    vexp = pin->GetReal("problem","vexp");
+  }
+  if ((iprof == 1) || (iprof == -5)) {
+    EnrollStaticGravPotFunction(BetaPotential);
+  } else if (iprof == 2) {
+    EnrollStaticGravPotFunction(NFWPotential);
+  }
 
   return;
 }
@@ -1002,12 +1090,66 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh) {
 
+
+  if (iprof == -3) {
+    // need to integrate this all the way from the start. Can use  :-( 
+    yarr0(0) = 1.0; // density
+    yarr0(1) = pparam->Vwind(); // velocity
+    yarr0(2) = 0.1; // pressure
+    Real dr;
+    Real r;
+    for (int i=is; i<=ie; ++i) {
+      r  = pco->x1f(i);
+      dr = pco->x1f(i+1)-r;
+      GetSteadyStateAdbWind(r,yarr0,dr,yarr1);
+      for (int l=0; l<3; ++l) yarr0(l) = yarr1(l);
+    } // This ends up with the analytic profile on the outer boundary wall
+    dr  = pco->x1v(ie+1)-pco->x1f(ie+1);
+    r   = pco->x1f(ie+1);
+    GetSteadyStateAdbWind(r,yarr0,dr,yarr1);
+    for (int i=1; i<=ngh; i++) {
+      prim(IDN,ks,js,ie+i) = yarr1(0);
+      prim(IVX,ks,js,ie+i) = yarr1(1);
+      prim(IVY,ks,js,ie+i) = 0.0;
+      prim(IVZ,ks,js,ie+i) = 0.0;
+      prim(IPR,ks,js,ie+i) = yarr1(2);
+      if (DUAL_ENERGY) prim(IGE,ks,js,ie+i) = yarr1(2);
+      prim(NHYDRO-NSCALARS  ,ks,js,ie+i) = 0.1; // metalicity
+      prim(NHYDRO-NSCALARS+1,ks,js,ie+i) = 0.0; // ambient
+      prim(NHYDRO-NSCALARS+2,ks,js,ie+i) = 1.0; // wind;
+      r  = pco->x1v(ie+i);
+      dr = pco->x1v(ie+i+1)-pco->x1v(ie+i); 
+      for (int l=0; l<3; ++l) yarr0(l) = yarr1(l);
+      GetSteadyStateAdbWind(r,yarr0,dr,yarr1);
+    }
+    return;
+  }
+
+  if (iprof == -4) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=1; i<=ngh; i++) {
+          Real r = pco->x1v(ie+i);
+          prim(IDN,k,j,ie+i) = HaloProfile(r);
+          prim(IVX,k,j,ie+i) = 0.0;
+          prim(IVY,k,j,ie+i) = 0.0;
+          prim(IVZ,k,j,ie+i) = 0.0;
+          prim(IPR,k,j,ie+i) = 1.0;
+          if (DUAL_ENERGY) prim(IGE,k,j,ie+i) = 1.0;
+          prim(NHYDRO-NSCALARS  ,k,j,ie+i) = 0.1; // metalicity
+          prim(NHYDRO-NSCALARS+1,k,j,ie+i) = 0.0; // ambient
+          prim(NHYDRO-NSCALARS+2,k,j,ie+i) = 1.0; // wind
+        }
+      }
+    }
+    return;
+  }
+
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
-#pragma omp simd 
       for (int i=1; i<=ngh; ++i) {
         Real r = pco->x1v(ie+i);
-        Real d = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        Real d = HaloProfile(r);
         prim(IDN,k,j,ie+i) = d;
         prim(IPR,k,j,ie+i) = d*pparam->Temp();
         if (DUAL_ENERGY) prim(IGE,k,j,ie+i) = d*pparam->Temp();
@@ -1064,14 +1206,80 @@ void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
 void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh) {
 
+  if (iprof == -3) {
+    yarr0(0) = 1.0; // density
+    yarr0(1) = pparam->Vwind(); // velocity
+    yarr0(2) = 0.1; // pressure
+    Real dr  = -(pco->x1f(is)-pco->x1v(is-1));
+    Real r   = pco->x1f(is);
+    GetSteadyStateAdbWind(r,yarr0,dr,yarr1);
+    for (int i=1; i<=ngh; i++) {
+      prim(IDN,ks,js,is-i) = yarr1(0);
+      prim(IVX,ks,js,is-i) = yarr1(1);
+      prim(IVY,ks,js,is-i) = 0.0;
+      prim(IVZ,ks,js,is-i) = 0.0;
+      prim(IPR,ks,js,is-i) = yarr1(2);
+      if (DUAL_ENERGY) prim(IGE,ks,js,is-i) = yarr1(2);
+      prim(NHYDRO-NSCALARS  ,ks,js,is-i) = 1.0; // metalicity
+      prim(NHYDRO-NSCALARS+1,ks,js,is-i) = 0.0; // ambient
+      prim(NHYDRO-NSCALARS+2,ks,js,is-i) = 1.0; // wind
+      r  = pco->x1v(is-i);
+      dr = -(pco->x1v(is-i)-pco->x1v(is-(i+1))); 
+      for (int l=0; l<3; ++l) yarr0(l) = yarr1(l);
+      GetSteadyStateAdbWind(r,yarr0,dr,yarr1);
+    }
+    return;
+  }
+
+  if (iprof == -4) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=1; i<=ngh; i++) {
+          Real r = pco->x1v(is-i);
+          prim(IDN,k,j,is-i) = HaloProfile(r);
+          prim(IVX,k,j,is-i) = 0.0;
+          prim(IVY,k,j,is-i) = 0.0;
+          prim(IVZ,k,j,is-i) = 0.0;
+          prim(IPR,k,j,is-i) = 1.0;
+          if (DUAL_ENERGY) prim(IGE,k,j,is-i) = 1.0;
+          prim(NHYDRO-NSCALARS  ,k,j,is-i) = 1.0; // metalicity
+          prim(NHYDRO-NSCALARS+1,k,j,is-i) = 0.0; // ambient
+          prim(NHYDRO-NSCALARS+2,k,j,is-i) = 1.0; // wind
+        }
+      }
+    }
+    return;
+  }
+
+  if (iprof == -5) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=1; i<=ngh; ++i) {
+          Real r   = pco->x1v(is-i);
+          Real d   = HaloProfile(r);
+          prim(IDN,k,j,is-i) = d;
+          prim(IPR,k,j,is-i) = d*pparam->Temp();
+          if (DUAL_ENERGY) prim(IGE,k,j,is-i) = d*pparam->Temp();
+          prim(IVX,k,j,is-i) = 0.0;
+          prim(IVY,k,j,is-i) = 0.0;
+          prim(IVZ,k,j,is-i) = 0.0;
+          prim(NHYDRO-NSCALARS  ,k,j,is-i) = 1.0; // metalicity
+          prim(NHYDRO-NSCALARS+1,k,j,is-i) = 0.0; // ambient 
+          prim(NHYDRO-NSCALARS+2,k,j,is-i) = 1.0; // wind
+        }
+      }
+    }
+    return;
+  }
+  
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
       Real x2 = pco->x2v(j);
-#pragma omp simd 
+//#pragma omp simd 
       for (int i=1; i<=ngh; ++i) {
         Real r   = pco->x1v(is-i);
-        Real dw  = pparam->Mdot()/(4.0*PI*fwind*SQR(r)*pparam->Vwind());
-        Real da = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        Real dw  = WindProfile(r);
+        Real da  = HaloProfile(r);
         Real fjp = 1.0-0.25*(1+std::tanh((x2-acosfwind)/0.02))*(1.0-std::tanh((x2-(PI-acosfwind))/0.02));
         fjp = ((je==js) || (fwind==1.0)) ? 1.0 : fjp;
         Real d   = da + (dw-da)*fjp;
@@ -1210,6 +1418,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // cooling
   pcoolfunc = new CoolingFunction();
 
+  iprof     = pin->GetOrAddInteger("problem","iprof",0); // 0: isothermal, 1: beta-model, 2: NFW
   icool     = pin->GetOrAddInteger("problem","icool",0); // 0: no cooling, 1: power-law cooling, 2: WSS09 cooling
   turbcool  = pin->GetOrAddReal("problem","turbcool",0.0); // add turbulent heating
   // potential parameters
@@ -1238,12 +1447,66 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     lengthcool = pin->GetOrAddReal("problem","lengthcool",1.13584e3); // set to 10kpc by default
   }
 
+  // constant wind test case (compare to analytic steady-state wind solution p55)
+  if (iprof == -3) {
+    k1.NewAthenaArray(3);
+    k2.NewAthenaArray(3);
+    k3.NewAthenaArray(3);
+    k4.NewAthenaArray(3);
+    yarr0.NewAthenaArray(3);
+    yarr1.NewAthenaArray(3);
+    ytemp_.NewAthenaArray(3);
+    // at cell wall
+    yarr0(0) = 1.0; // density
+    yarr0(1) = pparam->Vwind(); // velocity
+    yarr0(2) = 0.1; // pressure
+    Real dr  = pcoord->x1v(is)-pcoord->x1f(is); 
+    Real r   = pcoord->x1f(is);
+    GetSteadyStateAdbWind(r,yarr0,dr,yarr1);
+    for (int i=is; i<=ie; i++) {
+      phydro->u(IDN,ks,js,i) = yarr1(0);
+      phydro->u(IM1,ks,js,i) = phydro->u(IDN,ks,js,i)*yarr1(1);
+      phydro->u(IM2,ks,js,i) = 0.0;
+      phydro->u(IM3,ks,js,i) = 0.0;
+      phydro->u(IEN,ks,js,i) = yarr1(2)/gm1 + 0.5*SQR(phydro->u(IM1,ks,js,i))/phydro->u(IDN,ks,js,i);
+      if (DUAL_ENERGY) phydro->u(IIE,ks,js,i) = yarr1(2)/gm1;
+      phydro->u(NHYDRO-NSCALARS  ,ks,js,i) = 0.1*phydro->u(IDN,ks,js,i); // metalicity
+      phydro->u(NHYDRO-NSCALARS+1,ks,js,i) = 0.0; // ambient
+      phydro->u(NHYDRO-NSCALARS+2,ks,js,i) = phydro->u(IDN,ks,js,i);  // wind
+      r  = pcoord->x1v(i);
+      dr = pcoord->x1v(i+1)-pcoord->x1v(i); 
+      for (int l=0; l<3; ++l) yarr0(l) = yarr1(l);
+      GetSteadyStateAdbWind(r,yarr0,dr,yarr1);
+    }
+    return;
+  }
+
+  if (iprof == -4) {
+    for (int k=ks; k<=ke; k++) {
+      for (int j=js; j<=je; j++) {
+        for (int i=is; i<=ie; ++i) {
+          Real r = pcoord->x1v(i);
+          phydro->u(IDN,k,j,i) = HaloProfile(r);
+          phydro->u(IM1,k,j,i) = 0.0;
+          phydro->u(IM2,k,j,i) = 0.0;
+          phydro->u(IM3,k,j,i) = 0.0;
+          phydro->u(IEN,k,j,i) = 1.0/gm1;
+          if (DUAL_ENERGY) phydro->u(IIE,k,j,i) = 1.0/gm1;
+          phydro->u(NHYDRO-NSCALARS  ,k,j,i) = 0.1*phydro->u(IDN,k,j,i); // metalicity
+          phydro->u(NHYDRO-NSCALARS+1,k,j,i) = 0.0; // ambient
+          phydro->u(NHYDRO-NSCALARS+2,k,j,i) = phydro->u(IDN,k,j,i); // wind
+        }
+      }
+    }
+    return;
+  }
+  
   // only spherical coordinates
   for (int k=ks; k<=ke; k++) {
     for (int j=js; j<=je; j++) {
       for (int i=is; i<=ie; i++) {
         Real r     = pcoord->x1v(i); 
-        Real den   = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        Real den   = HaloProfile(r);
         phydro->u(IDN,k,j,i) = den;
         phydro->u(IM1,k,j,i) = 0.0;
         phydro->u(IM2,k,j,i) = 0.0;
