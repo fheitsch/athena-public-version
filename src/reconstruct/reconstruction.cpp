@@ -165,15 +165,15 @@ Reconstruction::Reconstruction(MeshBlock *pmb, ParameterInput *pin) {
     } else {
 #pragma omp simd
       for (int i=(pmb->is)-(NGHOST)+1; i<=(pmb->ie)+(NGHOST)-1; ++i) {
-        Real& dx_im1 = pmb->pcoord->dx1f(i-1);
-        Real& dx_i   = pmb->pcoord->dx1f(i  );
-        Real& dx_ip1 = pmb->pcoord->dx1f(i+1);
+        Real dx_im1 = pmb->pcoord->dx1f(i-1);
+        Real dx_i   = pmb->pcoord->dx1f(i  );
+        Real dx_ip1 = pmb->pcoord->dx1f(i+1);
         Real qe = dx_i/(dx_im1 + dx_i + dx_ip1);       // Outermost coeff in CW eq 1.7
         c1i(i) = qe*(2.0*dx_im1+dx_i)/(dx_ip1 + dx_i); // First term in CW eq 1.7
         c2i(i) = qe*(2.0*dx_ip1+dx_i)/(dx_im1 + dx_i); // Second term in CW eq 1.7
 
         if (i > (pmb->is)-(NGHOST)+1) {  // c3-c6 are not computed in first iteration
-          Real& dx_im2 = pmb->pcoord->dx1f(i-2);
+          Real dx_im2 = pmb->pcoord->dx1f(i-2);
           Real qa = dx_im2 + dx_im1 + dx_i + dx_ip1;
           Real qb = dx_im1/(dx_im1 + dx_i);
           Real qc = (dx_im2 + dx_im1)/(2.0*dx_im1 + dx_i);
@@ -190,8 +190,8 @@ Reconstruction::Reconstruction(MeshBlock *pmb, ParameterInput *pin) {
         if ((COORDINATE_SYSTEM == "cylindrical") ||
             (COORDINATE_SYSTEM == "spherical_polar")) {
           Real h_plus, h_minus;
-          Real& dx_i   = pmb->pcoord->dx1f(i);
-          Real& xv_i   = pmb->pcoord->x1v(i);
+          Real dx_i   = pmb->pcoord->dx1f(i);
+          Real xv_i   = pmb->pcoord->x1v(i);
           if (COORDINATE_SYSTEM == "cylindrical") {
             // cylindrical radial coordinate
             h_plus = 3.0 + dx_i/(2.0*xv_i);
@@ -242,9 +242,9 @@ Reconstruction::Reconstruction(MeshBlock *pmb, ParameterInput *pin) {
       } else {
 #pragma omp simd
         for (int j=(pmb->js)-(NGHOST)+2; j<=(pmb->je)+(NGHOST)-1; ++j) {
-          Real& dx_jm1 = pmb->pcoord->dx2f(j-1);
-          Real& dx_j   = pmb->pcoord->dx2f(j  );
-          Real& dx_jp1 = pmb->pcoord->dx2f(j+1);
+          Real dx_jm1 = pmb->pcoord->dx2f(j-1);
+          Real dx_j   = pmb->pcoord->dx2f(j  );
+          Real dx_jp1 = pmb->pcoord->dx2f(j+1);
           Real qe = dx_j/(dx_jm1 + dx_j + dx_jp1);       // Outermost coeff in CW eq 1.7
           c1j(j) = qe*(2.0*dx_jm1+dx_j)/(dx_jp1 + dx_j); // First term in CW eq 1.7
           c2j(j) = qe*(2.0*dx_jp1+dx_j)/(dx_jm1 + dx_j); // Second term in CW eq 1.7
@@ -268,9 +268,9 @@ Reconstruction::Reconstruction(MeshBlock *pmb, ParameterInput *pin) {
           if (COORDINATE_SYSTEM == "spherical_polar") {
             // x2 = theta polar coordinate adjustment
             Real h_plus, h_minus;
-            Real& dx_j   = pmb->pcoord->dx2f(j);
-            Real& xf_j   = pmb->pcoord->x2f(j);
-            Real& xf_jp1   = pmb->pcoord->x2f(j+1);
+            Real dx_j   = pmb->pcoord->dx2f(j);
+            Real xf_j   = pmb->pcoord->x2f(j);
+            Real xf_jp1   = pmb->pcoord->x2f(j+1);
             Real dmu = cos(xf_j) - cos(xf_jp1);
             Real dmu_tilde = sin(xf_j) - sin(xf_jp1);
             h_plus = (dx_j*(dmu_tilde + dx_j*cos(xf_jp1)))/(
@@ -319,9 +319,9 @@ Reconstruction::Reconstruction(MeshBlock *pmb, ParameterInput *pin) {
       } else {
 #pragma omp simd
         for (int k=(pmb->ks)-(NGHOST)+2; k<=(pmb->ke)+(NGHOST)-1; ++k) {
-          Real& dx_km1 = pmb->pcoord->dx3f(k-1);
-          Real& dx_k   = pmb->pcoord->dx3f(k  );
-          Real& dx_kp1 = pmb->pcoord->dx3f(k+1);
+          Real dx_km1 = pmb->pcoord->dx3f(k-1);
+          Real dx_k   = pmb->pcoord->dx3f(k  );
+          Real dx_kp1 = pmb->pcoord->dx3f(k+1);
           Real qe = dx_k/(dx_km1 + dx_k + dx_kp1);       // Outermost coeff in CW eq 1.7
           c1k(k) = qe*(2.0*dx_km1+dx_k)/(dx_kp1 + dx_k); // First term in CW eq 1.7
           c2k(k) = qe*(2.0*dx_kp1+dx_k)/(dx_km1 + dx_k); // Second term in CW eq 1.7

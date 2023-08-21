@@ -45,7 +45,13 @@ CoolingFunction* pcoolfunc;
 class Parameters;
 Parameters* pparam;
 
-typedef Real (*TimeStepFunc_t)(MeshBlock *pmb);
+typedef Real (*ProfileFunc_t)(Real r);
+ProfileFunc_t ProfileFunc;
+
+Real BetaProfile(const Real r); 
+Real ConstProfile(const Real r);
+
+//typedef Real (*TimeStepFunc_t)(MeshBlock *pmb);
 
 //========================================================================================
 // Parameters
@@ -112,7 +118,7 @@ class Parameters {
 //typedef Real (*CoolingFunc_t)(const Real dens, const Real temp); // For generic cooling functions
 
 int nx1, icool;
-Real x1rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool;
+Real x1rat, x2rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool;
 Real coolsafe = 0.05, lengthcool;
 AthenaArray<Real> k1, k2, k3, k4, yarr0, yarr1, ytemp_;
 // scratch arrays for cooling
@@ -125,6 +131,8 @@ Real HeatCoolTimeStep(MeshBlock *pmb);
 void GSSAWdydr(const Real r, const AthenaArray<Real> &y, AthenaArray<Real> &dydr);
 void GetSteadyStateAdbWind(const Real r0, const AthenaArray<Real> &y0, const Real dr, AthenaArray<Real> &y);
 Real BetaPotential(const Real x1, const Real x2, const Real x3, const Real time);
+Real BetaProfile(const Real r);
+Real ConstProfile(const Real r);
 void DdensDr(const Real s,  const AthenaArray<Real> &y, AthenaArray<Real> &k);
 
 static void stop_this();
@@ -146,6 +154,8 @@ void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
 
 Real PowerGridX1(Real x, RegionSize rs);
+Real QuadraticX2(Real x, RegionSize rs);
+Real ExponentialX2(Real x, RegionSize rs);
 
 void ShockDetector(AthenaArray<Real> data, AthenaArray<Real> grid, int outArr[], Real eps);
 
@@ -169,6 +179,15 @@ Real BetaPotential(const Real x1, const Real x2, const Real x3, const Real time)
   Real phi = 1.5*pparam->Beta()*pparam->Temp()*std::log(1.0+SQR(x));
   return phi;
 }
+
+Real BetaProfile(const Real r) {
+  return pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+}
+
+Real ConstProfile(const Real r) {
+  return pparam->Dens0();
+}
+
 
 //========================================================================================
 // Class CoolingFunction
@@ -944,11 +963,11 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   //   for an expanding grid).
   //========================================================================================
 
-  if (COORDINATE_SYSTEM != "spherical_polar") {
-    std::stringstream msg;
-    msg << "### FATAL ERROR in galpause.cpp: coordinate system must be spherical-polar" << std::endl;
-    throw std::runtime_error(msg.str().c_str());
-  }
+  //if (COORDINATE_SYSTEM != "spherical_polar") {
+  //  std::stringstream msg;
+  //  msg << "### FATAL ERROR in galpause.cpp: coordinate system must be spherical-polar" << std::endl;
+  //  throw std::runtime_error(msg.str().c_str());
+  //}
 
   //if (!DUAL_ENERGY) {
   //  std::stringstream msg;
@@ -962,9 +981,15 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     EnrollUserBoundaryFunction(OUTER_X1,OuterX1_HydroStat);
 
   x1rat      = pin->GetOrAddReal("mesh","x1rat",1.0);
+  x2rat      = pin->GetOrAddReal("mesh","x2rat",1.0);
   nx1        = pin->GetInteger("mesh","nx1");
   if (x1rat < 0.0) 
     EnrollUserMeshGenerator(X1DIR,PowerGridX1);
+  if (x2rat == -2.0) {
+    EnrollUserMeshGenerator(X2DIR,QuadraticX2);
+  } else if (x2rat == -1.0) {
+    EnrollUserMeshGenerator(X2DIR,ExponentialX2);
+  }
 
   if (EXPANDING_ENABLED) {
     SetGridData(4);
@@ -986,7 +1011,19 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     EnrollUserTimeStepFunction(HeatCoolTimeStep);
   }
 
-  EnrollStaticGravPotFunction(BetaPotential);
+  //EnrollStaticGravPotFunction(BetaPotential);
+
+  int iprof = pin->GetOrAddInteger("problem","iprof",1);
+  if (iprof == 0) {
+    ProfileFunc = ConstProfile;
+  } else if (iprof == 1) {
+    ProfileFunc = BetaProfile;
+    EnrollStaticGravPotFunction(BetaPotential);
+  } else {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in galpause.cpp: invalid value for iprof." << std::endl;
+    throw std::runtime_error(msg.str().c_str());
+  }
 
   return;
 }
@@ -1007,7 +1044,8 @@ void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
 #pragma omp simd 
       for (int i=1; i<=ngh; ++i) {
         Real r = pco->x1v(ie+i);
-        Real d = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        //Real d = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        Real d = ProfileFunc(r);
         prim(IDN,k,j,ie+i) = d;
         prim(IPR,k,j,ie+i) = d*pparam->Temp();
         if (DUAL_ENERGY) prim(IGE,k,j,ie+i) = d*pparam->Temp();
@@ -1071,7 +1109,8 @@ void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int i=1; i<=ngh; ++i) {
         Real r   = pco->x1v(is-i);
         Real dw  = pparam->Mdot()/(4.0*PI*fwind*SQR(r)*pparam->Vwind());
-        Real da = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        //Real da = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        Real da = ProfileFunc(r);
         Real fjp = 1.0-0.25*(1+std::tanh((x2-acosfwind)/0.02))*(1.0-std::tanh((x2-(PI-acosfwind))/0.02));
         fjp = ((je==js) || (fwind==1.0)) ? 1.0 : fjp;
         Real d   = da + (dw-da)*fjp;
@@ -1120,7 +1159,7 @@ void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
 
 //========================================================================================
 //! \fn Real PowerGridX1(Real x, RegionSize rs)
-//  \brief Generates grid following r_i = r_0*delta**i
+//  \brief Generates grid following r_i = r_0*(r1/r0)**i
 //========================================================================================
 Real PowerGridX1(Real x, RegionSize rs) {
   //Real delta = pow((rs.x1max/rs.x1min),1.0/((Real)nx1));
@@ -1129,6 +1168,23 @@ Real PowerGridX1(Real x, RegionSize rs) {
   Real r     = rs.x1min*pow(delta,x);
   //fprintf(stdout,"[PowerGridX1]: x=%17.9e delta=%17.9e delta^(1/n)=%17.9e\n",x,delta,pow(delta,1.0/((Real) nx1)));
   return r;
+}
+
+//========================================================================================
+//! \fn Real CompressedX2(Real x, RegionSize rs)
+//  \brief Generates grid following theta_i = 3*psi^2+1 (see Athena++ documentation)
+//========================================================================================
+
+Real QuadraticX2(Real x, RegionSize rs)
+{
+  Real a = 3.0;
+  return rs.x2min + (3.0/(a+3.0))*x*(a*x*(x/3.0-1.0)+a+1.0)*(rs.x2max-rs.x2min);
+}
+
+Real ExponentialX2(Real x, RegionSize rs)
+{
+  Real a = 3.0;
+  return rs.x2min + (rs.x2max-rs.x2min)*(1.0-std::exp(-a*x))/(1.0-std::exp(-a));
 }
 
 //========================================================================================
@@ -1207,8 +1263,6 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   Real gamma;
 
-  // cooling
-  pcoolfunc = new CoolingFunction();
 
   icool     = pin->GetOrAddInteger("problem","icool",0); // 0: no cooling, 1: power-law cooling, 2: WSS09 cooling
   turbcool  = pin->GetOrAddReal("problem","turbcool",0.0); // add turbulent heating
@@ -1221,6 +1275,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   rmin = pin->GetReal("mesh","x1min"); 
   Real rmax = pin->GetReal("mesh","x1max"); 
   pparam    = new Parameters(vesc,temp,mdot,vwind,n0,rmin,rmax);
+
 
   // wind parameters
   fwind   = pin->GetOrAddReal("problem","fwind",0.1);
@@ -1243,7 +1298,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     for (int j=js; j<=je; j++) {
       for (int i=is; i<=ie; i++) {
         Real r     = pcoord->x1v(i); 
-        Real den   = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        //Real den   = pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
+        Real den   = ProfileFunc(r);
         phydro->u(IDN,k,j,i) = den;
         phydro->u(IM1,k,j,i) = 0.0;
         phydro->u(IM2,k,j,i) = 0.0;

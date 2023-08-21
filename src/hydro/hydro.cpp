@@ -41,6 +41,8 @@ Hydro::Hydro(MeshBlock *pmb, ParameterInput *pin) {
   if (integrator == "ssprk5_4")
     // future extension may add "int nregister" to Hydro class
     u2.NewAthenaArray(NHYDRO,ncells3,ncells2,ncells1);
+  dvn.NewAthenaArray(ncells1);
+  dvt.NewAthenaArray(ncells1);
 
   flux[X1DIR].NewAthenaArray(NHYDRO,ncells3,ncells2,ncells1+1);
   if (pmy_block->block_size.nx2 > 1)
@@ -111,6 +113,8 @@ Hydro::~Hydro() {
   w1.DeleteAthenaArray();
   // only allocated if integrator was 3S* integrator
   u2.DeleteAthenaArray();
+  dvn.DeleteAthenaArray();
+  dvt.DeleteAthenaArray();
 
   flux[X1DIR].DeleteAthenaArray();
   if (pmy_block->block_size.nx2 > 1) flux[X2DIR].DeleteAthenaArray();

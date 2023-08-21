@@ -19,7 +19,6 @@
 #include "../hydro/hydro.hpp"
 #include "field_diffusion/field_diffusion.hpp"
 
-//#define DEBUG
 //----------------------------------------------------------------------------------------
 //! \fn  void Field::ComputeCornerEMFs
 //  \brief
@@ -93,20 +92,11 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
         ev2 = evel2(j);       
         // need to subtract grid velocity from w(IVY) etc. 
         // The EMFs in e3_x2f etc already include the wall motion via Riemann solver.
-#ifndef DEBUG
 #pragma omp simd private(ev1)
-#endif
         for (int i=is-1; i<=ie+1; ++i) {
           ev1 = evel1(i);
           cc_e_(k,j,i) =   (w(IVY,k,j,i)-ev2)*bcc(IB1,k,j,i) 
                          - (w(IVX,k,j,i)-ev1)*bcc(IB2,k,j,i);
-#ifdef DEBUG
-          if ((i>=6) && (i<=7) && (j>=6) && (j<=7)) {
-
-            fprintf(stdout,"[emf]: i=%3i j=%3i cce=%13.5e vx=%13.5e evx=%13.5e vy=%13.5e evy=%13.5e bcc1=%13.5e bcc2=%13.5e\n",
-                    i,j,cc_e_(k,j,i),w(IVX,k,j,i),ev1,w(IVY,k,j,i),ev2,bcc(IB1,k,j,i),bcc(IB2,k,j,i));        
-          }
-#endif
         }
       } else { // standard branch without expansion
 #pragma omp simd
@@ -121,9 +111,7 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
   // integrate E3 to corner using SG07
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je+1; ++j) {
-#ifndef DEBUG
 #pragma omp simd
-#endif
       for (int i=is; i<=ie+1; ++i) {
         Real de3_l2 = (1.0-w_x1f(k,j-1,i))*(e3_x2f(k,j,i  ) - cc_e_(k,j-1,i  )) +
                       (    w_x1f(k,j-1,i))*(e3_x2f(k,j,i-1) - cc_e_(k,j-1,i-1));
@@ -143,17 +131,6 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
       }
     }
   }
-#ifdef DEBUG
-  int i=7;
-  int j=7;
-  // lower one first
-  fprintf(stdout,"[emf]: e3(%1i,%1i)=%10.2e e3x2f(%1i,%1i)=%10.2e e3x2f(%1i,%1i)=%10.2e e3x1f(%1i,%1i)=%10.2e e3x1f(%1i,%1i)=%10.2e\n",
-          i,j,e3(ks,j,i),i-1,j,e3_x2f(ks,j,i-1),i,j,e3_x2f(ks,j,i),i,j-1,e3_x1f(ks,j-1,i),i,j,e3_x1f(ks,j,i));
-  i=7;
-  j=8;
-  fprintf(stdout,"[emf]: e3(%1i,%1i)=%10.2e e3x2f(%1i,%1i)=%10.2e e3x2f(%1i,%1i)=%10.2e e3x1f(%1i,%1i)=%10.2e e3x1f(%1i,%1i)=%10.2e\n",
-          i,j,e3(ks,j,i),i-1,j,e3_x2f(ks,j,i-1),i,j,e3_x2f(ks,j,i),i,j-1,e3_x1f(ks,j-1,i),i,j,e3_x1f(ks,j,i));
-#endif
 
   // for 2D: copy E1 and E2 to edges and return
   if (pmb->block_size.nx3 == 1) {

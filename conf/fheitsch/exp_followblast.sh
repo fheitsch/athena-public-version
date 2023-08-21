@@ -12,7 +12,9 @@ python3 configure.py\
                          --cflag="DH5_HAVE_PARALLEL -std=c++11" \
                          --ccmd /nas/longleaf/apps-dogwood/hdf5/1.10.2/openmpi/bin/h5pcc \
                          -hdf5 \
+                         --ng 4 \
                          --ns 1 \
+                         -mpi \
                          -exp \
                          -b
                           

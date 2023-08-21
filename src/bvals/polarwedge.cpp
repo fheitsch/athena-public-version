@@ -34,33 +34,33 @@ void PolarWedgeInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
     }
   }
 
-	// dual-energy
-	if (DUAL_ENERGY) {
-		Real sign = 1; 
+  // dual-energy
+  if (DUAL_ENERGY) {
+    Real sign = 1; 
     for (int k=ks; k<=ke; ++k) {
       for (int j=1; j<=(NGHOST); ++j) {
 #pragma omp simd
         for (int i=is; i<=ie; ++i) {
-          prim(IIE,k,js-j,i) = sign * prim(IIE,k,js+j-1,i);
+          prim(IGE,k,js-j,i) = sign * prim(IGE,k,js+j-1,i);
         }
       }
     }
-	}
+  }
 	
-	// passive scalars 
-	if (NSCALARS > 0) {
-		for (int n=(NHYDRO-NSCALARS); n<NHYDRO; ++n) {
-			Real sign = 1; 
-			for (int k=ks; k<=ke; ++k) {
-				for (int j=1; j<=(NGHOST); ++j) {
+  // passive scalars 
+  if (NSCALARS > 0) {
+    for (int n=(NHYDRO-NSCALARS); n<NHYDRO; ++n) {
+      Real sign = 1; 
+      for (int k=ks; k<=ke; ++k) {
+        for (int j=1; j<=(NGHOST); ++j) {
 #pragma omp simd
-					for (int i=is; i<=ie; ++i) {
-						prim(n,k,js-j,i) = sign * prim(n,k,js+j-1,i);
-					}
-				}
-			}
-		}
-	}
+          for (int i=is; i<=ie; ++i) {
+            prim(n,k,js-j,i) = sign * prim(n,k,js+j-1,i);
+          }
+        }
+      }
+    }
+  }
 
   // copy face-centered magnetic fields into ghost zones, reflecting b2
   if (MAGNETIC_FIELDS_ENABLED) {
@@ -122,33 +122,33 @@ void PolarWedgeOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
       }
     }
   }
-	// dual-energy
-	if (DUAL_ENERGY) {
-		Real sign = 1; 
+  // dual-energy
+  if (DUAL_ENERGY) {
+    Real sign = 1; 
     for (int k=ks; k<=ke; ++k) {
       for (int j=1; j<=(NGHOST); ++j) {
 #pragma omp simd
         for (int i=is; i<=ie; ++i) {
-          prim(IIE,k,je+j,i) = sign * prim(IIE,k,je-j+1,i);
+          prim(IGE,k,je+j,i) = sign * prim(IGE,k,je-j+1,i);
         }
       }
     }
-	}
+  }
 	
-	// passive scalars 
-	if (NSCALARS > 0) {
-		for (int n=(NHYDRO-NSCALARS); n<NHYDRO; ++n) {
-			Real sign = 1; 
-			for (int k=ks; k<=ke; ++k) {
-				for (int j=1; j<=(NGHOST); ++j) {
+  // passive scalars 
+  if (NSCALARS > 0) {
+    for (int n=(NHYDRO-NSCALARS); n<NHYDRO; ++n) {
+      Real sign = 1; 
+      for (int k=ks; k<=ke; ++k) {
+        for (int j=1; j<=(NGHOST); ++j) {
 #pragma omp simd
-					for (int i=is; i<=ie; ++i) {
-						prim(n,k,je+j,i) = sign * prim(n,k,je-j+1,i);
-					}
-				}
-			}
-		}
-	}
+          for (int i=is; i<=ie; ++i) {
+            prim(n,k,je+j,i) = sign * prim(n,k,je-j+1,i);
+          }
+        }
+      }
+    }
+  }
 
   // copy face-centered magnetic fields into ghost zones, reflecting b2
   if (MAGNETIC_FIELDS_ENABLED) {

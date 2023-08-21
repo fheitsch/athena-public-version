@@ -26,7 +26,6 @@
 #ifdef MPI_PARALLEL
 #include <mpi.h>
 #endif
-//#define DEBUG
 //----------------------------------------------------------------------------------------
 // Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin)
 //   \brief constructor, initializes data structures and parameters
@@ -343,12 +342,6 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
 }
 
 //----------------------------------------------------------------------------------------
-// void Expansion::AddWallEMF()
-//  \brief: Adds the wall-emf to the total EMF to be used in ct.cpp. Copy of 
-//          calculate_corner_EMF.cpp
-
-
-//----------------------------------------------------------------------------------------
 // void Expansion::RescaleField()
 //   \brief Area-rescale for magnetic field, similar to last action in ExpansionSourceTerms
 //          Since CT is run separately via IntegrateField in time_integrator, we need to 
@@ -377,18 +370,10 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         pmb->pcoord->Face1Area(k,j,is,iu,areaold);  // old area at position i ("lower")
         Real darea2 = pmb->pcoord->dx3f(k)*(v2f(j+1)-v2f(j))*dt;
         Real darea3 = pmb->pcoord->dx2f(j)*(v3f(k+1)-v3f(k))*dt;   
-#ifndef DEBUG
 #pragma omp simd
-#endif
         for (int i=is; i<=iu; ++i) {
           areanew           = areaold(i) + darea2 + darea3;
           b_out.x1f(k,j,i) *= areaold(i)/areanew;
-#ifdef DEBUG
-          if ((i>=6) && (i<=7) && (j>=6) && (j<=7)) {
-            fprintf(stdout,"[RescaleField]: i=%3i j=%3i darea2=%13.5e darea3=%13.5e areaold=%13.5e areanew=%13.5e b1=%13.5e\n",
-                    i,j,darea2,darea3,areaold(i),areanew,b_out.x1f(k,j,i));
-          }
-#endif
         }
       } 
     }
@@ -561,28 +546,34 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
   //FACE CENTERED
   //x1
   if (x1Move) {
+#pragma omp simd
     for (int i=il; i<=iu+1; ++i){
       pmb->pcoord->x1f(i) = x1_0(i);
     }
     //fprintf(stdout,"x1f=%13.5e %13.5e %13.5e ... %13.5e\n",pmb->pcoord->x1f(is-2),pmb->pcoord->x1f(is-1),pmb->pcoord->x1f(is),pmb->pcoord->x1f(ie+1));
+#pragma omp simd
     for (int i=il; i<=iu; ++i) {
       pmb->pcoord->dx1f(i) = pmb->pcoord->x1f(i+1)-pmb->pcoord->x1f(i);
     }
   }
   //x2
   if (x2Move){
+#pragma omp simd
     for (int j=jl; j<=ju+1; ++j){
       pmb->pcoord->x2f(j) = x2_0(j);
     }
+#pragma omp simd
     for (int j=jl; j<=ju; ++j) {
       pmb->pcoord->dx2f(j) = pmb->pcoord->x2f(j+1)- pmb->pcoord->x2f(j);
     }
   }
   //x3
   if (x3Move){
+#pragma omp simd
     for (int k=kl; k<=ku+1; ++k){
       pmb->pcoord->x3f(k) = x3_0(k);
     }
+#pragma omp simd
     for (int k=kl; k<=ku; ++k) {
       pmb->pcoord->dx3f(k) = pmb->pcoord->x3f(k+1)- pmb->pcoord->x3f(k);
     }
@@ -795,7 +786,6 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
 
     //Reset Reconstruction coefficients.
 
-
   } else if (COORDINATE_SYSTEM == "cylindrical") {
     //Cylindrical
     for (int i=il; i<=iu; ++i) {
@@ -895,6 +885,7 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
       pmb->pcoord->x1v(i) = 0.75*(pow(pmb->pcoord->x1f(i+1),4) - pow(pmb->pcoord->x1f(i),4))
                                 /(pow(pmb->pcoord->x1f(i+1),3) - pow(pmb->pcoord->x1f(i),3));
     }
+#pragma omp simd
     for (int i=il; i<=iu-1; ++i) {
       pmb->pcoord->dx1v(i) = pmb->pcoord->x1v(i+1) - pmb->pcoord->x1v(i);
     }
@@ -906,11 +897,13 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
       pmb->pcoord->x2v(jl) = 0.5*(pmb->pcoord->x2f(jl+1) + pmb->pcoord->x2f(jl));
       pmb->pcoord->dx2v(jl) = pmb->pcoord->dx2f(jl);
     } else if (x2Move) {
+#pragma omp simd
       for (int j=jl; j<=ju; ++j) {
         pmb->pcoord->x2v(j) = ((sin(pmb->pcoord->x2f(j+1)) - pmb->pcoord->x2f(j+1)*cos(pmb->pcoord->x2f(j+1))) -
                   (sin(pmb->pcoord->x2f(j  )) - pmb->pcoord->x2f(j  )*cos(pmb->pcoord->x2f(j  ))))/
                   (cos(pmb->pcoord->x2f(j  )) - cos(pmb->pcoord->x2f(j+1)));
       }
+#pragma omp simd
       for (int j=jl; j<=ju-1; ++j) {
         pmb->pcoord->dx2v(j) = pmb->pcoord->x2v(j+1) - pmb->pcoord->x2v(j);
       }
@@ -922,15 +915,18 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
       pmb->pcoord->x3v(kl) = 0.5*(pmb->pcoord->x3f(kl+1) + pmb->pcoord->x3f(kl));
       pmb->pcoord->dx3v(kl) = pmb->pcoord->dx3f(kl);
     } else if (x3Move) {
+#pragma omp simd
       for (int k=kl; k<=ku; ++k) {
         pmb->pcoord->x3v(k) = 0.5*(pmb->pcoord->x3f(k+1) + pmb->pcoord->x3f(k));
       }
+#pragma omp simd
       for (int k=kl; k<=ku-1; ++k) {
         pmb->pcoord->dx3v(k) = pmb->pcoord->x3v(k+1) - pmb->pcoord->x3v(k);
       }
     }
 
     //Geometry Coefficients
+#pragma omp simd
     for (int i=il; i<iu; ++i) {
       pmb->pcoord->h2v(i) = pmb->pcoord->x1v(i);
       pmb->pcoord->h2f(i) = pmb->pcoord->x1f(i);
@@ -938,36 +934,46 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
       pmb->pcoord->h31f(i) = pmb->pcoord->x1f(i);
     }
     // x2-direction
-    if (pmb->block_size.nx2 == 1) {
-      pmb->pcoord->h32v(jl) = sin(pmb->pcoord->x2v(jl));
-      pmb->pcoord->h32f(jl) = sin(pmb->pcoord->x2f(jl));
-      pmb->pcoord->dh32vd2(jl) = cos(pmb->pcoord->x2v(jl));
-      pmb->pcoord->dh32fd2(jl) = cos(pmb->pcoord->x2f(jl));
-    } else {
-      for (int j=jl; j<=ju; ++j) {
-        pmb->pcoord->h32v(j) = sin(pmb->pcoord->x2v(j));
-        pmb->pcoord->h32f(j) = sin(pmb->pcoord->x2f(j));
-        pmb->pcoord->dh32vd2(j) = cos(pmb->pcoord->x2v(j));
-        pmb->pcoord->dh32fd2(j) = cos(pmb->pcoord->x2f(j));
+    if (x2Move) { 
+      if (pmb->block_size.nx2 == 1) {
+        pmb->pcoord->h32v(jl) = sin(pmb->pcoord->x2v(jl));
+        pmb->pcoord->h32f(jl) = sin(pmb->pcoord->x2f(jl));
+        pmb->pcoord->dh32vd2(jl) = cos(pmb->pcoord->x2v(jl));
+        pmb->pcoord->dh32fd2(jl) = cos(pmb->pcoord->x2f(jl));
+      } else {
+#pragma omp simd
+        for (int j=jl; j<=ju; ++j) {
+          pmb->pcoord->h32v(j) = sin(pmb->pcoord->x2v(j));
+          pmb->pcoord->h32f(j) = sin(pmb->pcoord->x2f(j));
+          pmb->pcoord->dh32vd2(j) = cos(pmb->pcoord->x2v(j));
+          pmb->pcoord->dh32fd2(j) = cos(pmb->pcoord->x2f(j));
+        }
       }
     }
     if ((pmb->pmy_mesh->multilevel==true) && MAGNETIC_FIELDS_ENABLED) {
+#pragma omp simd
       for (int i=il; i<=iu; ++i) {
         pmb->pcoord->x1s2(i) = pmb->pcoord->x1s3(i) = (2.0/3.0)*(pow(pmb->pcoord->x1f(i+1),3) - pow(pmb->pcoord->x1f(i),3))
                             /(SQR(pmb->pcoord->x1f(i+1)) - SQR(pmb->pcoord->x1f(i)));
       }
-      if (pmb->block_size.nx2 == 1) {
-        pmb->pcoord->x2s1(jl) = pmb->pcoord->x2s3(jl) = pmb->pcoord->x2v(jl);
-      } else {
-        for (int j=jl; j<=ju; ++j) {
-          pmb->pcoord->x2s1(j) = pmb->pcoord->x2s3(j) = pmb->pcoord->x2v(j);
+      if (x2Move) {
+        if (pmb->block_size.nx2 == 1) {
+          pmb->pcoord->x2s1(jl) = pmb->pcoord->x2s3(jl) = pmb->pcoord->x2v(jl);
+        } else {
+#pragma omp simd
+          for (int j=jl; j<=ju; ++j) {
+            pmb->pcoord->x2s1(j) = pmb->pcoord->x2s3(j) = pmb->pcoord->x2v(j);
+          }
         }
       }
-      if (pmb->block_size.nx3 == 1) {
-        pmb->pcoord->x3s1(kl) = pmb->pcoord->x3s2(kl) = pmb->pcoord->x3v(kl);
-      } else {
-        for (int k=kl; k<=ku; ++k) {
-          pmb->pcoord->x3s1(k) = pmb->pcoord->x3s2(k) = pmb->pcoord->x3v(k);
+      if (x3Move) {
+        if (pmb->block_size.nx3 == 1) {
+          pmb->pcoord->x3s1(kl) = pmb->pcoord->x3s2(kl) = pmb->pcoord->x3v(kl);
+        } else {
+#pragma omp simd
+          for (int k=kl; k<=ku; ++k) {
+            pmb->pcoord->x3s1(k) = pmb->pcoord->x3s2(k) = pmb->pcoord->x3v(k);
+          }
         }
       }
     }
@@ -997,7 +1003,7 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
         // R^2 at the volume center for non-ideal MHD
         pmb->pcoord->coord_area1vc_i_(i) = SQR(pmb->pcoord->x1v(i));
       }
-      pmb->pcoord->coord_area1_i_(iu+ng+1) = pmb->pcoord->x1f(iu+ng+1)*pmb->pcoord->x1f(iu+ng+1);
+      pmb->pcoord->coord_area1_i_(iu+1) = pmb->pcoord->x1f(iu+ng+1)*pmb->pcoord->x1f(iu+ng+1);
 #pragma omp simd
       for (int i=il; i<=iu-1; ++i) {//non-ideal MHD
         // 0.5*(R_{i+1}^2 - R_{i}^2)
@@ -1006,49 +1012,51 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
         pmb->pcoord->coord_area3vc_i_(i)= pmb->pcoord->coord_area2vc_i_(i);
       }
 
-      if (pmb->block_size.nx2 > 1) {
+      if (x2Move) {
+        if (pmb->block_size.nx2 > 1) {
 #pragma omp simd
-        for (int j=jl; j<=ju; ++j) {
-          Real sm = fabs(sin(pmb->pcoord->x2f(j  )));
-          Real sp = fabs(sin(pmb->pcoord->x2f(j+1)));
-          Real cm = cos(pmb->pcoord->x2f(j  ));
-          Real cp = cos(pmb->pcoord->x2f(j+1));
-          // d(sin theta) = d(-cos theta)
-          pmb->pcoord->coord_area1_j_(j) = fabs(cm - cp);
-          // sin theta
-          pmb->pcoord->coord_area2_j_(j) = sm;
-          // d(sin theta) = d(-cos theta)
-          pmb->pcoord->coord_vol_j_(j) = pmb->pcoord->coord_area1_j_(j);
-          // (A2^{+} - A2^{-})/dV
-          pmb->pcoord->coord_src1_j_(j) = (sp - sm)/pmb->pcoord->coord_vol_j_(j);
-          // (dS/2)/(S_c dV)
-          pmb->pcoord->coord_src2_j_(j) = (sp - sm)/((sm + sp)*pmb->pcoord->coord_vol_j_(j));
-          // < cot theta > = (|sin th_p| - |sin th_m|) / |cos th_m - cos th_p|
-          pmb->pcoord->coord_src3_j_(j) = (sp - sm)/pmb->pcoord->coord_vol_j_(j);
-          // d(sin theta) = d(-cos theta) at the volume center for non-ideal MHD
-          pmb->pcoord->coord_area1vc_j_(j)= fabs(cos(pmb->pcoord->x2v(j))-cos(pmb->pcoord->x2v(j+1)));
-          // sin theta at the volume center for non-ideal MHD
-          pmb->pcoord->coord_area2vc_j_(j)= fabs(sin(pmb->pcoord->x2v(j)));
+          for (int j=jl; j<=ju; ++j) {
+            Real sm = fabs(sin(pmb->pcoord->x2f(j  )));
+            Real sp = fabs(sin(pmb->pcoord->x2f(j+1)));
+            Real cm = cos(pmb->pcoord->x2f(j  ));
+            Real cp = cos(pmb->pcoord->x2f(j+1));
+            // d(sin theta) = d(-cos theta)
+            pmb->pcoord->coord_area1_j_(j) = fabs(cm - cp);
+            // sin theta
+            pmb->pcoord->coord_area2_j_(j) = sm;
+            // d(sin theta) = d(-cos theta)
+            pmb->pcoord->coord_vol_j_(j) = pmb->pcoord->coord_area1_j_(j);
+            // (A2^{+} - A2^{-})/dV
+            pmb->pcoord->coord_src1_j_(j) = (sp - sm)/pmb->pcoord->coord_vol_j_(j);
+            // (dS/2)/(S_c dV)
+            pmb->pcoord->coord_src2_j_(j) = (sp - sm)/((sm + sp)*pmb->pcoord->coord_vol_j_(j));
+            // < cot theta > = (|sin th_p| - |sin th_m|) / |cos th_m - cos th_p|
+            pmb->pcoord->coord_src3_j_(j) = (sp - sm)/pmb->pcoord->coord_vol_j_(j);
+            // d(sin theta) = d(-cos theta) at the volume center for non-ideal MHD
+            pmb->pcoord->coord_area1vc_j_(j)= fabs(cos(pmb->pcoord->x2v(j))-cos(pmb->pcoord->x2v(j+1)));
+            // sin theta at the volume center for non-ideal MHD
+            pmb->pcoord->coord_area2vc_j_(j)= fabs(sin(pmb->pcoord->x2v(j)));
+          }
+          pmb->pcoord->coord_area2_j_(ju+ng+1) = fabs(sin(pmb->pcoord->x2f(ju+ng+1)));
+          if (pmb->pcoord->IsPole(jl))   // inner polar boundary
+            pmb->pcoord->coord_area1vc_j_(jl-1)= 2.0-cos(pmb->pcoord->x2v(jl-1))-cos(pmb->pcoord->x2v(jl));
+          if (pmb->pcoord->IsPole(ju))   // outer polar boundary
+            pmb->pcoord->coord_area1vc_j_(ju)  = 2.0+cos(pmb->pcoord->x2v(ju))+cos(pmb->pcoord->x2v(ju+1));
+        } else {
+          Real sm = fabs(sin(pmb->pcoord->x2f(jl  )));
+          Real sp = fabs(sin(pmb->pcoord->x2f(jl+1)));
+          Real cm = cos(pmb->pcoord->x2f(jl  ));
+          Real cp = cos(pmb->pcoord->x2f(jl+1));
+          pmb->pcoord->coord_area1_j_(jl) = fabs(cm - cp);
+          pmb->pcoord->coord_area2_j_(jl) = sm;
+          pmb->pcoord->coord_area1vc_j_(jl)= pmb->pcoord->coord_area1_j_(jl);
+          pmb->pcoord->coord_area2vc_j_(jl)= sin(pmb->pcoord->x2v(jl));
+          pmb->pcoord->coord_vol_j_(jl) = pmb->pcoord->coord_area1_j_(jl);
+          pmb->pcoord->coord_src1_j_(jl) = (sp - sm)/pmb->pcoord->coord_vol_j_(jl);
+          pmb->pcoord->coord_src2_j_(jl) = (sp - sm)/((sm + sp)*pmb->pcoord->coord_vol_j_(jl));
+          pmb->pcoord->coord_src3_j_(jl) = (sp - sm)/pmb->pcoord->coord_vol_j_(jl);
+          pmb->pcoord->coord_area2_j_(jl+1) = sp;
         }
-        pmb->pcoord->coord_area2_j_(ju+ng+1) = fabs(sin(pmb->pcoord->x2f(ju+ng+1)));
-        if (pmb->pcoord->IsPole(jl))   // inner polar boundary
-          pmb->pcoord->coord_area1vc_j_(jl-1)= 2.0-cos(pmb->pcoord->x2v(jl-1))-cos(pmb->pcoord->x2v(jl));
-        if (pmb->pcoord->IsPole(ju))   // outer polar boundary
-          pmb->pcoord->coord_area1vc_j_(ju)  = 2.0+cos(pmb->pcoord->x2v(ju))+cos(pmb->pcoord->x2v(ju+1));
-      } else {
-        Real sm = fabs(sin(pmb->pcoord->x2f(jl  )));
-        Real sp = fabs(sin(pmb->pcoord->x2f(jl+1)));
-        Real cm = cos(pmb->pcoord->x2f(jl  ));
-        Real cp = cos(pmb->pcoord->x2f(jl+1));
-        pmb->pcoord->coord_area1_j_(jl) = fabs(cm - cp);
-        pmb->pcoord->coord_area2_j_(jl) = sm;
-        pmb->pcoord->coord_area1vc_j_(jl)= pmb->pcoord->coord_area1_j_(jl);
-        pmb->pcoord->coord_area2vc_j_(jl)= sin(pmb->pcoord->x2v(jl));
-        pmb->pcoord->coord_vol_j_(jl) = pmb->pcoord->coord_area1_j_(jl);
-        pmb->pcoord->coord_src1_j_(jl) = (sp - sm)/pmb->pcoord->coord_vol_j_(jl);
-        pmb->pcoord->coord_src2_j_(jl) = (sp - sm)/((sm + sp)*pmb->pcoord->coord_vol_j_(jl));
-        pmb->pcoord->coord_src3_j_(jl) = (sp - sm)/pmb->pcoord->coord_vol_j_(jl);
-        pmb->pcoord->coord_area2_j_(jl+1) = sp;
       }
     }
   }

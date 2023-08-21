@@ -46,6 +46,7 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
   Real igm1 = 1.0/gm1;
   Real iso_cs = pmy_block->peos->GetIsoSoundSpeed();
 
+  int n;
   for (int k=kl; k<=ku; ++k) {
   for (int j=jl; j<=ju; ++j) {
 //#pragma omp simd private(wli,wri,wroe,fl,fr,flxi)

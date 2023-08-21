@@ -41,7 +41,7 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
   Real igm1 = 1.0/gm1;
   
   Expansion *ex = pmy_block->pex;
-  AthenaArray<Real> &eFlx = ex->expFlux[(ivx-1)];;
+  AthenaArray<Real> &eFlx = ex->expFlux[(ivx-1)];
   AthenaArray<Real> &eVel = ex->vf[(ivx-1)];
   bool move;
   if (EXPANDING_ENABLED) {

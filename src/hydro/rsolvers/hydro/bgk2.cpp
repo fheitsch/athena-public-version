@@ -81,32 +81,31 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
     joff=0;
     koff=0;
     x123f.InitWithShallowCopy(pmb->pcoord->x1f);
-    dx123v.InitWithShallowCopy(pmb->pcoord->dx1v);
+    dx123v.InitWithShallowCopy(pmb->pcoord->dx1f);
   }
   else if (ivx==2) {
     ioff=0;
     joff=1;
     koff=0;
     x123f.InitWithShallowCopy(pmb->pcoord->x2f);
-    dx123v.InitWithShallowCopy(pmb->pcoord->dx2v);
+    dx123v.InitWithShallowCopy(pmb->pcoord->dx2f);
   }
   else if (ivx==3) {
     ioff=0;
     joff=0;
     koff=1;
     x123f.InitWithShallowCopy(pmb->pcoord->x3f);
-    dx123v.InitWithShallowCopy(pmb->pcoord->dx3v);
+    dx123v.InitWithShallowCopy(pmb->pcoord->dx3f);
   }
 
-  for (int k=kl; k<=ku; ++k) {
-  for (int j=jl; j<=ju; ++j) {
-//#pragma distribute_point
-//#pragma omp simd private(wli,wri,wroe,flxi,fl,fr)
-  for (int i=il; i<=iu; ++i) {
+  Real x1f=0.0,dxx;
 
-    //Real x1f = pmy_block->pcoord->x1f(i);
-    Real x1f = x123f(i);
-    Real dxx = dx123v(i);
+  for (int k=kl; k<=ku; ++k) {
+    if (ivx==1) dxx = pmb->pcoord->dx3f(k);
+  for (int j=jl; j<=ju; ++j) {
+    if (ivx==2) dxx = pmb->pcoord->dx2f(j);
+  for (int i=il; i<=iu; ++i) {
+    if (ivx==1) dxx = pmb->pcoord->dx1f(i);
 
     int kdif=k-koff;
     int jdif=j-joff;

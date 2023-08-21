@@ -36,6 +36,8 @@ public:
   AthenaArray<Real> u1,w1;    // time-integrator memory register #2
   AthenaArray<Real> u2;       // time-integrator memory register #3
   // (no more than MAX_NREGISTER allowed)
+  // for the HL3D2 solver
+  AthenaArray<Real> dvn, dvt;
 
   AthenaArray<Real> flux[3];  // face-averaged flux vector
 
@@ -54,7 +56,8 @@ public:
     const int il, const int iu, const int ivx, const AthenaArray<Real> &bx,
     AthenaArray<Real> &wl, AthenaArray<Real> &wr, AthenaArray<Real> &flx,
     AthenaArray<Real> &e1, AthenaArray<Real> &e2);
-
+  void CalculateVelocityDifferences(const int k, const int j, const int il, const int iu,
+    const int ivx, AthenaArray<Real> &dvn, AthenaArray<Real> &dvt);
   void AddGravityFlux(void);
   void AddGravityFluxWithGflx(void);
   void CalculateGravityFlux(AthenaArray<Real> &phi_in);
