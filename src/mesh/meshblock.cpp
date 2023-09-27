@@ -59,6 +59,7 @@ MeshBlock::MeshBlock(int igid, int ilid, LogicalLocation iloc, RegionSize input_
   loc=iloc;
   gflag=igflag;
   cost=1.0;
+  dimension = pm->dimension;
 
   nuser_out_var = 0;
   nreal_user_meshblock_data_ = 0;

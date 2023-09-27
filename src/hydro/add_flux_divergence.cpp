@@ -56,9 +56,6 @@ void Hydro::AddFluxDivergenceToAverage(AthenaArray<Real> &w, AthenaArray<Real> &
 #pragma omp simd
         for (int i=is; i<=ie; ++i) {
           dflx(n,i) = (x1area(i+1) *x1flux(n,k,j,i+1) - x1area(i)*x1flux(n,k,j,i));
-          //if (((n==0) || (n==4)) && (i > 32) && (i < 37)) 
-          //  fprintf(stdout,"[AddFluxDivergence]: i=%3i n=%1i dflx=%17.9e A1p=%17.9e fp=%17.9e A1m=%17.9e fm=%17.9e\n",
-          //        i,n,dflx(n,i),x1area(i+1),x1flux(n,k,j,i+1),x1area(i),x1flux(n,k,j,i));
         }
       }
 

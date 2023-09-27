@@ -5,7 +5,7 @@
 
 python3 configure.py\
                          --prob exp_followblast \
-                         --coord cartesian \
+                         --coord spherical_polar \
                          --eos adiabatic \
                          --flux hlld \
                          --cxx icc \
@@ -14,8 +14,8 @@ python3 configure.py\
                          -hdf5 \
                          --ng 4 \
                          --ns 1 \
-                         -mpi \
                          -exp \
-                         -b
+                         -debug \
+                         -b 
                           
 

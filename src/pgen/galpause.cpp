@@ -118,7 +118,7 @@ class Parameters {
 //typedef Real (*CoolingFunc_t)(const Real dens, const Real temp); // For generic cooling functions
 
 int nx1, icool;
-Real x1rat, x2rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool;
+Real x1rat, x2rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool, zmetwind, zmethalo;
 Real coolsafe = 0.05, lengthcool;
 AthenaArray<Real> k1, k2, k3, k4, yarr0, yarr1, ytemp_;
 // scratch arrays for cooling
@@ -542,6 +542,13 @@ class CoolingFunction {
 
       log10dens = std::log10(densarr(ndens-1)/densarr(0));
       log10temp = std::log10(temparr(ntemp-1)/temparr(0));
+      if (Globals::my_rank == 0) {
+        std::cout << "[CoolingFunction]: min(dens) = " << std::scientific << std::setw(11) << std::setprecision(3) << densarr(0) 
+                  <<                   " max(dens) = " << std::scientific << std::setw(11) << std::setprecision(3) << densarr(ndens-1)
+                  <<                   " min(temp) = " << std::scientific << std::setw(11) << std::setprecision(3) << temparr(0)
+                  <<                   " max(temp) = " << std::scientific << std::setw(11) << std::setprecision(3) << temparr(ntemp-1)
+                  << std::endl;
+      }
     }
  
     ~CoolingFunction () {
@@ -581,26 +588,34 @@ class CoolingFunction {
     };
 
     Real HeatCoolFunc(const Real dens, const Real temp, const Real vtot, const Real zmet) {
-      //if (mode == 0) { // piece-wise power law
-      //  Real gamma  = EvalGain(temp);
-      //  Real lambda = EvalLoss(temp);
-      //  Real dedt = (gamma-dens*lambda)*fac;
-      //  return dedt;
-      //} else if (mode == 1) { // WSS09
       int idens,itemp,idens1,itemp1;
       Real dedt,wd,wt,owd,owt,w1,w2,w3,w4,lambda,lambda_0,lambda_z,xe_0,xe_s;
+      Real dd = dens;
+      Real tt = temp;
       // need to interpolate in density and temperature first.
       idens = (int) std::floor(ndens*std::log10(dens/densarr(0))/log10dens); 
-      idens = (idens < 0 ? 0 : idens);
-      idens = (idens > ndens-1 ? ndens-1 : idens);
+      if (idens < 0) {
+        idens = 0;
+        dd    = densarr(0);
+      }
+      if (idens >= ndens-1) {
+        idens = ndens-2; // enforce last interpolation bin, with wd = 1.0
+        dd    = densarr(ndens-1);
+      }
       idens1= idens+1;
-      wd    = (dens-densarr(idens))/(densarr(idens1)-densarr(idens));
+      wd    = (dd-densarr(idens))/(densarr(idens1)-densarr(idens));
       owd   = 1.0-wd;
       itemp = (int) std::floor(ntemp*std::log10(temp/temparr(0))/log10temp);
-      itemp = (itemp < 0 ? 0 : itemp);
-      itemp = (itemp > ntemp-1 ? ntemp-1 : itemp);
+      if (itemp < 0) {
+        itemp = 0;
+        tt    = temparr(0);
+      }
+      if (itemp >= ntemp-1) {
+        itemp = ntemp-2; // enforce last interpolation bin, with wt = 1.0
+        tt    = temparr(ntemp-1);
+      }
       itemp1= itemp+1;
-      wt    = (temp-temparr(itemp))/(temparr(itemp1)-temparr(itemp));
+      wt    = (tt-temparr(itemp))/(temparr(itemp1)-temparr(itemp));
       owt   = 1.0-wt;
       w1    = owt*owd;
       w2    = owt* wd;
@@ -624,9 +639,10 @@ class CoolingFunction {
                  + xion_s   (itemp1,idens )*w3
                  + xion_s   (itemp1,idens1)*w4;
       lambda = lambda_0 + lambda_z* (xe_0/xe_s)*zmet;
-      dedt   = -dens*lambda*fac + turbcool*dens*SQR(vtot)*vtot/lengthcool; // cooling is positive in WSS09, and turbulent heating rate in code units
+      // Cooling is positive in WSS09, and turbulent heating rate in code units
+      // vtot should contain soundspeed to prevent zeroing of temperature for quiescent flow.
+      dedt   = -dd*lambda*fac + turbcool*dd*SQR(vtot)*vtot/lengthcool; 
       return dedt;
-      //}
     };
 
     //========================================================================================
@@ -704,14 +720,15 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
 #pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         dens(i)  = prim(IDN,k,j,i); 
-        vtot(i)  = std::sqrt(  SQR(prim(IVX,k,j,i))
-                             + SQR(prim(IVY,k,j,i))
-                             + SQR(prim(IVZ,k,j,i)));
         if (DUAL_ENERGY) {
           temp0(i) = prim(IGE,k,j,i)/prim(IDN,k,j,i); // IGE is pressure
         } else {
           temp0(i) = prim(IPR,k,j,i)/prim(IDN,k,j,i); 
         }
+        vtot(i)  = std::sqrt(  SQR(prim(IVX,k,j,i))
+                             + SQR(prim(IVY,k,j,i))
+                             + SQR(prim(IVZ,k,j,i))
+                             + temp0(i));
         zmet(i)  = prim(NHYDRO-NSCALARS,k,j,i);
       }
       //for (int i=pmb->is; i<=pmb->ie; ++i) {
@@ -773,14 +790,15 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
 #pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         dens(i)  = w(IDN,k,j,i); 
-        vtot(i)  = std::sqrt(  SQR(w(IVX,k,j,i))
-                             + SQR(w(IVY,k,j,i))
-                             + SQR(w(IVZ,k,j,i)));
         if (DUAL_ENERGY) {
           temp0(i) = w(IGE,k,j,i)/dens(i); // IGE is pressure
         } else {
           temp0(i) = w(IPR,k,j,i)/dens(i);
         }
+        vtot(i)  = std::sqrt(  SQR(w(IVX,k,j,i))
+                             + SQR(w(IVY,k,j,i))
+                             + SQR(w(IVZ,k,j,i))
+                             + temp0(i));
         zmet(i)  = w(NHYDRO-NSCALARS,k,j,i);
       } 
       for (int i=pmb->is; i<=pmb->ie; ++i) {
@@ -1006,6 +1024,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   gm1      = gam-1.0;
   icool    = pin->GetOrAddReal("problem","icool",0);
   coolsafe = pin->GetOrAddReal("problem","coolsafe",0.05);
+  zmetwind = pin->GetOrAddReal("problem","zmetwind",1.0);
+  zmethalo = pin->GetOrAddReal("problem","zmetwind",0.1);
   if (icool > 0) {
     EnrollUserExplicitSourceFunction(HeatCool);
     EnrollUserTimeStepFunction(HeatCoolTimeStep);
@@ -1120,7 +1140,7 @@ void InnerX1_Wind(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
         prim(IVX,k,j,is-i) = pparam->Vwind()*fjp;
         prim(IVY,k,j,is-i) = 0.0;
         prim(IVZ,k,j,is-i) = 0.0;
-        prim(NHYDRO-NSCALARS  ,k,j,is-i) = 0.1+0.9*fjp; // metalicity
+        prim(NHYDRO-NSCALARS  ,k,j,is-i) = zmethalo+(zmetwind-zmethalo)*fjp; // metalicity
         prim(NHYDRO-NSCALARS+1,k,j,is-i) = 1.0-fjp; // ambient 
         prim(NHYDRO-NSCALARS+2,k,j,is-i) = fjp; // wind
       }
@@ -1279,6 +1299,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   // wind parameters
   fwind   = pin->GetOrAddReal("problem","fwind",0.1);
+  zmetwind= pin->GetOrAddReal("problem","zmetwind",0.1);
+  zmethalo= pin->GetOrAddReal("problem","zmethalo",1.0);
   gamma   = peos->GetGamma();
   gm1     = gamma - 1.0;
   csound2 = pparam->Temp();
@@ -1311,7 +1333,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
                                                              / phydro->u(IDN,k,j,i);
           if (DUAL_ENERGY) phydro->u(IIE,k,j,i) = den*pparam->Temp()/gm1;
         }
-        phydro->u(NHYDRO-NSCALARS  ,k,j,i) = 0.1*den; // metallicity
+        phydro->u(NHYDRO-NSCALARS  ,k,j,i) = zmetwind*den; // metallicity
         phydro->u(NHYDRO-NSCALARS+1,k,j,i) = den; // ambient
         phydro->u(NHYDRO-NSCALARS+2,k,j,i) = 0.0; // wind
       }
@@ -1380,7 +1402,7 @@ void Mesh::UserWorkInLoop(void) {
 
   MeshBlock *pmb=pblock;
 
-  const int nq = 10;
+  const int nq = 11;
   Real qtot[nq]; // 0: vol, 1: dens, 2: vtot, 3: etot, 4: eint, 5: ekin, 6: emag, 7-9: v1-v3
   Real qmin[nq];
   Real qmax[nq];
@@ -1398,6 +1420,8 @@ void Mesh::UserWorkInLoop(void) {
   for (int q=0; q<2; q++)
     lengrat[q] = (FLT_MAX);
   Real u[NHYDRO];
+
+  bool allfail = false;
 
   while (pmb != NULL) { // collect results from individual pmbs
     for (int k=pmb->ks; k<=pmb->ke; k++) {
@@ -1432,7 +1456,6 @@ void Mesh::UserWorkInLoop(void) {
                         << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
                         << std::endl;
             }
-            if (!(RECOVER_ENABLED)) stop_this();
           } 
           Real dx1  = pmb->pcoord->dx1f(i);
           Real x1  = pmb->pcoord->x1v(i);
@@ -1456,6 +1479,11 @@ void Mesh::UserWorkInLoop(void) {
           ener[8] = u[IM2]/u[IDN];
           ener[9] = u[IM3]/u[IDN];
           ener[3] = ener[2]-ener[4]-ener[5];
+          if (DUAL_ENERGY) {
+            ener[10] = ener[6]*gm1/ener[1];
+          } else {
+            ener[10] = ener[3]*gm1/ener[1];
+          }
           for (int q=1; q<nq; q++) {
             qtot[q] += ener[q]*dvol;
             if (ener[q] < qmin[q]) qmin[q] = ener[q];
@@ -1510,6 +1538,10 @@ void Mesh::UserWorkInLoop(void) {
               << " min = "                   << std::scientific << std::setw(13) << std::setprecision(5) << qmin[1]
               << " max = "                   << std::scientific << std::setw(13) << std::setprecision(5) << qmax[1]
               << std::endl;
+    std::cout << "[UserWorkInLoop]: temp = " << std::scientific << std::setw(13) << std::setprecision(5) << qtot[10]
+              << " min = "                   << std::scientific << std::setw(13) << std::setprecision(5) << qmin[10]
+              << " max = "                   << std::scientific << std::setw(13) << std::setprecision(5) << qmax[10]
+              << std::endl;
     std::cout << "[UserWorkInLoop]: vel1 = " << std::scientific << std::setw(13) << std::setprecision(5) << qtot[7]
               << " min = "                   << std::scientific << std::setw(13) << std::setprecision(5) << qmin[7]
               << " max = "                   << std::scientific << std::setw(13) << std::setprecision(5) << qmax[7]
@@ -1548,10 +1580,18 @@ void Mesh::UserWorkInLoop(void) {
   }
   
   if (!(RECOVER_ENABLED)) {
-    if (qmin[3] <= 0.0) {
+    if (qmin[3] <= 0.0)  {
       std::cout << "[UserWorkInLoop]: eint < 0" << std::endl;
       stop_this();
     }
+    if (allfail) {
+      std::cout << "[UserWorkInLoop]: failure" << std::endl;
+      stop_this();
+    }
+  }
+  if (dt < 1e-12) {
+    std::cout << "[UserWorkInLoop]: Timestep dropped below 1e-12. Failure." << std::endl;
+    stop_this();
   }
 
   return;

@@ -79,6 +79,7 @@ public:
   int gid, lid;
   int cis,cie,cjs,cje,cks,cke,cnghost;
   int gflag;
+  int dimension;
   // At every cycle n, hydro and field registers (u, b) are advanced from t^n -> t^{n+1},
   // the time-integration scheme may partially substep several storage register pairs
   // (u,b), (u1,b1), (u2, b2), ..., (umn, bm) through the dt interval.
