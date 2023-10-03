@@ -127,7 +127,10 @@ void Field::ComputeCornerE(AthenaArray<Real> &w, AthenaArray<Real> &bcc) {
 
         e3(k,j,i) = 0.25*(de3_l1 + de3_r1 + de3_l2 + de3_r2 + e3_x2f(k,j,i-1) +
                           e3_x2f(k,j,i) + e3_x1f(k,j-1,i) + e3_x1f(k,j,i));
-        
+        if ((i==104) && (j==js+(je-js+1)/2) && (k==ks+(ke-ks+1)/2)) {
+          fprintf(stdout,"[emf]: i=%3i e3=%17.9e cc_e=%17.9e e3_x1f=%17.9e e3_x2f=%17.9e\n",
+                  i,e3(k,j,i),cc_e_(k,j,i),e3_x1f(k,j,i),e3_x2f(k,j,i));
+        }
       }
     }
   }

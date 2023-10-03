@@ -1371,7 +1371,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
               pfield->b.x1f(k,j,i) = 0.0;  
             }
             if ((j==js+(je-js+1)/2) && (k==ks+(ke-ks+1)/2)) {
-              fprintf(stdout,"j=%3i b1f_init=%17.9e\n", i,pfield->b.x1f(k,j,i));
+              fprintf(stdout,"i=%3i b1f_init=%17.9e\n", i,pfield->b.x1f(k,j,i));
             }
           }
         }

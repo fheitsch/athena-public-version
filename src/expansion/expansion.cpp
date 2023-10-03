@@ -458,9 +458,9 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         for (int i=is; i<=ie+1; ++i) {
           Real darea1       = 2.0*pmb->pcoord->x1f(i)*v1f(i)*dt * dx2 * dx3; 
           areanew           = areaold(i) + darea1;
-          if ((j==js+(je-js+1)/2) && (k==ks+(ke-ks+1)/2)){
-            fprintf(stdout,"j=%3i ratA1=%17.9e b_old=%17.9e b_new=%17.9e\n",
-                    i-is,areanew/areaold(i),b_out.x1f(k,j,i),b_out.x1f(k,j,i)*areaold(i)/areanew);
+          if ((i==104) && (j==js+(je-js+1)/2) && (k==ks+(ke-ks+1)/2)){
+            fprintf(stdout,"[RescaleField]: i=%3i ratA1=%17.9e b_old=%17.9e b_new=%17.9e\n",
+                    i,areanew/areaold(i),b_out.x1f(k,j,i),b_out.x1f(k,j,i)*areaold(i)/areanew);
           }
           b_out.x1f(k,j,i) *= areaold(i)/areanew;
         }

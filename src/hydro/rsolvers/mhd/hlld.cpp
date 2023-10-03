@@ -46,7 +46,9 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
   AthenaArray<Real> &evel  = ex->vf[(ivx-1)];
   AthenaArray<Real> &evely = ex->vv[(ivy-1)]; // These are the cross term velocities for the wall fluxes.
   AthenaArray<Real> &evelz = ex->vv[(ivz-1)];
-  bool move = false;
+  bool move    = false;
+  bool v1fora2 = false;
+  bool v1fora3 = false;
   if (EXPANDING_ENABLED) {
     if ((ivx == IVX)&&(ex->x1Move)){
       move = true;
@@ -54,6 +56,15 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       move = true;
     } else if ((ivx == IVZ)&&(ex->x3Move)){
       move = true;
+    }
+    // for spherical-polar, need the cross terms for magnetic fluxes.
+    // Radial expansion must be set, but theta and phi cannot expand.
+    // For reduced dimensions (1 or 2), these are not activated (no IVY, IVZ).
+    if ((ivx == IVY) && (!ex->x2Move) && (ex->x1Move)) {
+      v1fora2 = true;
+    }
+    if ((ivx == IVZ) && (!ex->x3Move) && (ex->x1Move)) {
+      v1fora3 = true;
     }
   }
   Real wi[(NHYDRO+2)];
@@ -424,7 +435,6 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       }
 #endif
 
-
     if (DUAL_ENERGY)  // IGE is pressure
       flx(IIE,k,j,i) = (flxi[IDN] >= 0 ? flxi[IDN]*wli[IGE]/wli[IDN] : flxi[IDN]*wri[IGE]/wri[IDN])*igm1;
 
@@ -432,50 +442,85 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       flx(n,k,j,i)   = (flxi[IDN] >= 0 ? flxi[IDN]*wli[n] : flxi[IDN]*wri[n]);
 
     //For Time Dependent grid, account for Wall Flux
-    if ((EXPANDING_ENABLED) && (move)) {
+    // For spherical-polar, we need the cross velocities
+    // (actually, only the radial velocity).
+    // Generally, if one direction is not updated,
+    // the cross terms in the induction equation still
+    // require the cross velocities. 
+    if (EXPANDING_ENABLED) {
+      wallv  = 0.0;
+      wallvy = 0.0;
+      wallvz = 0.0;
+
       //--- Step 1. Determine Flux Direction
-      if (ivx == IVX){
-        wallv  = evel(i);   // 1
-        wallvy = evely(j);  // 2
-        wallvz = evelz(k);  // 3
-      } else if (ivx == IVY) {
-        wallv  = evel(j);   // 2
-        wallvy = evely(k);  // 3
-        wallvz = evelz(i);  // 1
-      } else if (ivx == IVZ){
-        wallv  = evel(k);   // 3
-        wallvy = evely(i);  // 1
-        wallvz = evelz(j);  // 2
-      } else {
-        wallv  = 0.0;
-        wallvy = 0.0;
-        wallvz = 0.0;
+      if (move) {
+        if (ivx == IVX){
+          wallv  = evel(i);   // 1
+          wallvy = evely(j);  // 2
+          wallvz = evelz(k);  // 3
+        } else if (ivx == IVY) {
+          wallv  = evel(j);   // 2
+          wallvy = evely(k);  // 3
+          wallvz = evelz(i);  // 1
+        } else if (ivx == IVZ){
+          wallv  = evel(k);   // 3
+          wallvy = evely(i);  // 1
+          wallvz = evelz(j);  // 2
+        }
+      } else { // cross terms for spherical
+        if (v1fora2) {
+          wallvz = evelz(i);  
+        }
+        if (v1fora3) {
+          wallvy = evely(i);
+        }
       }
       //--- Step 2. Load primitive variables
-      if (wallv > 0.0) {
-        for (n=0; n<(NHYDRO+2); ++n)
-          wi[n] = wri[n];
-      } else if (wallv < 0.0) {
-        for (n=0; n<(NHYDRO+2); ++n)
-          wi[n] = wli[n];
+      if (move) {
+        if (wallv > 0.0) {
+          for (n=0; n<(NHYDRO+2); ++n)
+            wi[n] = wri[n];
+        } else if (wallv < 0.0) {
+          for (n=0; n<(NHYDRO+2); ++n)
+            wi[n] = wli[n];
+        } else {
+          for (n=0; n<(NHYDRO+2); ++n)
+            wi[n] = 0.0;
+        }
+        e =   wi[IPR]*igm1 
+            + 0.5*wi[IDN]*(SQR(wi[IVX]) + SQR(wi[IVY]) + SQR(wi[IVZ])) 
+            + 0.5*(bxsq + SQR(wi[IBY]) + SQR(wi[IBZ]));
+        eflx(IDN,k,j,i) = wi[IDN]*wallv;
+        eflx(ivx,k,j,i) = wi[IDN]*wi[IVX]*wallv;
+        eflx(ivy,k,j,i) = wi[IDN]*wi[IVY]*wallv;
+        eflx(ivz,k,j,i) = wi[IDN]*wi[IVZ]*wallv;
+        eflx(IEN,k,j,i) = e*wallv;
+        if (DUAL_ENERGY)
+          eflx(IIE,k,j,i) = wi[IGE]*wallv*igm1; // IGE is pressure
+        for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
+          eflx(n,k,j,i) = wi[IDN]*wi[n]*wallv;
+        ey(k,j,i) += (wi[IBY]*wallv - bxi*wallvy); // modify ey, ez directly here. 
+        ez(k,j,i) -= (wi[IBZ]*wallv - bxi*wallvz);
+        if ((i==104) && (j==jl+(ju-jl+1)/2) && (k==kl+(ku-kl+1)/2)) {
+          fprintf(stdout,"[hlld]: move    i=%3i ivx=%1i bxi=%17.9e wallv=%17.9e wallvy=%17.9e wallvz=%17.9e\n",
+                  i,ivx,bxi,wallv,wallvy,wallvz); 
+        }
       } else {
-        for (n=0; n<(NHYDRO+2); ++n)
-          wi[n] = 0.0;
+        if (v1fora2) {
+          ez(k,j,i) += bxi*wallvz;
+          if ((i==104) && (j==jl+(ju-jl+1)/2) && (k==kl+(ku-kl+1)/2)) {
+            fprintf(stdout,"[hlld]: v1fora2 i=%3i ivx=%1i bxi=%17.9e wallvz=%17.9e\n",
+                    i,ivx,bxi,wallvz);
+          }
+        }
+        if (v1fora3) {
+          ey(k,j,i) -= bxi*wallvy;
+          if ((i==104) && (j==jl+(ju-jl+1)/2) && (k==kl+(ku-kl+1)/2)) {
+            fprintf(stdout,"[hlld]: v1fora3 i=%3i ivx=%1i bxi=%17.9e wallvy=%17.9e\n",
+                    i,ivx,bxi,wallvy);
+          }
+        }
       }
-      e =   wi[IPR]*igm1 
-          + 0.5*wi[IDN]*(SQR(wi[IVX]) + SQR(wi[IVY]) + SQR(wi[IVZ])) 
-          + 0.5*(bxsq + SQR(wi[IBY]) + SQR(wi[IBZ]));
-      eflx(IDN,k,j,i) = wi[IDN]*wallv;
-      eflx(ivx,k,j,i) = wi[IDN]*wi[IVX]*wallv;
-      eflx(ivy,k,j,i) = wi[IDN]*wi[IVY]*wallv;
-      eflx(ivz,k,j,i) = wi[IDN]*wi[IVZ]*wallv;
-      eflx(IEN,k,j,i) = e*wallv;
-      if (DUAL_ENERGY)
-        eflx(IIE,k,j,i) = wi[IGE]*wallv*igm1; // IGE is pressure
-      for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
-        eflx(n,k,j,i) = wi[IDN]*wi[n]*wallv;
-      ey(k,j,i) += (wi[IBY]*wallv - bxi*wallvy); // modify ey, ez directly here. 
-      ez(k,j,i) -= (wi[IBZ]*wallv - bxi*wallvz);
 #ifdef DEBUG
       // e3x2f(6,7)=  0.00e+00 e3x2f(7,7)=  0.00e+00 e3x1f(7,6)=  0.00e+00 e3x1f(7,7)=  0.00e+00
       // e3x2f(6,8)= -1.00e+00 e3x2f(7,8)= -1.00e+00 e3x1f(7,7)=  0.00e+00 e3x1f(7,8)=  0.00e+00

@@ -728,7 +728,7 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
         vtot(i)  = std::sqrt(  SQR(prim(IVX,k,j,i))
                              + SQR(prim(IVY,k,j,i))
                              + SQR(prim(IVZ,k,j,i))
-                             + temp0(i));
+                             + (temp0(i) < 1.0e4 ? 1.0e4 : temp0(i)) );
         zmet(i)  = prim(NHYDRO-NSCALARS,k,j,i);
       }
       //for (int i=pmb->is; i<=pmb->ie; ++i) {
@@ -798,7 +798,7 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
         vtot(i)  = std::sqrt(  SQR(w(IVX,k,j,i))
                              + SQR(w(IVY,k,j,i))
                              + SQR(w(IVZ,k,j,i))
-                             + temp0(i));
+                             + (temp0(i) < 1.0e4 ? 1.0e4 : temp0(i)) );
         zmet(i)  = w(NHYDRO-NSCALARS,k,j,i);
       } 
       for (int i=pmb->is; i<=pmb->ie; ++i) {
