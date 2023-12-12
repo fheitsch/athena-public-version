@@ -53,13 +53,8 @@ void Field::CT(const Real wght, FaceField &b_out) {
       pmb->pcoord->Edge3Length(k,j+1,is,ie+1,len_p1);
 #pragma omp simd
       for (int i=is; i<=ie+1; ++i) {
-        Real bold = b_out.x1f(k,j,i);
         b_out.x1f(k,j,i) -= wght*
            ((pmb->pmy_mesh->dt)/area(i))*(len_p1(i)*e3(k,j+1,i) - len(i)*e3(k,j,i));
-        if ((i==104) && (j == js+(je-js+1)/2) && (k == ks+(ke-ks+1)/2)) {
-          fprintf(stdout,"[ct]: i=%3i b_in=%17.9e b_out=%17.9e b_out/b_in=%17.9e e3+=%17.9e e3-=%17.9e\n", 
-                  i,bold,b_out.x1f(k,j,i),b_out.x1f(k,j,i)/bold,e3(k,j+1,i),e3(k,j,i));
-        }
       }
 
       if (pmb->block_size.nx3 > 1) {

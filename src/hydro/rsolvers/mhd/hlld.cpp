@@ -12,7 +12,6 @@
 
 // C++ headers
 
-//#define DEBUG
 
 #include <algorithm>  // max(), min()
 #include <cmath>      // sqrt()
@@ -47,8 +46,8 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
   AthenaArray<Real> &evely = ex->vv[(ivy-1)]; // These are the cross term velocities for the wall fluxes.
   AthenaArray<Real> &evelz = ex->vv[(ivz-1)];
   bool move    = false;
-  bool v1fora2 = false;
-  bool v1fora3 = false;
+  bool v1fora2 = false; // MHD EMF: require v1 for update along x2 (only spherical-polar)
+  bool v1fora3 = false; // MHD EMF: require v1 for update along x3 (only spherical-polar)
   if (EXPANDING_ENABLED) {
     if ((ivx == IVX)&&(ex->x1Move)){
       move = true;
@@ -59,8 +58,9 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
     }
     // for spherical-polar, need the cross terms for magnetic fluxes.
     // Radial expansion must be set, but theta and phi cannot expand.
-    // For reduced dimensions (1 or 2), these are not activated (no IVY, IVZ).
-    if ((ivx == IVY) && (!ex->x2Move) && (ex->x1Move)) {
+    // For 2D, there is no update along IVZ, hence v1fora3 will be false. 
+    // For 1D, there is no update along IVY, hence v1fora2 will be false.
+    if ((ivx == IVY) && (!ex->x2Move) && (ex->x1Move)) { 
       v1fora2 = true;
     }
     if ((ivx == IVZ) && (!ex->x3Move) && (ex->x1Move)) {
@@ -421,20 +421,6 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
     ey(k,j,i) = -flxi[IBY];
     ez(k,j,i) =  flxi[IBZ];
 
-#ifdef DEBUG
-      // e3x2f(6,7)=  0.00e+00 e3x2f(7,7)=  0.00e+00 e3x1f(7,6)=  0.00e+00 e3x1f(7,7)=  0.00e+00
-      // e3x2f(6,8)= -1.00e+00 e3x2f(7,8)= -1.00e+00 e3x1f(7,7)=  0.00e+00 e3x1f(7,8)=  0.00e+00
-      if (ivx == IVX) { // ey = e3x1.
-        if ((i==7) && ((j==7) || (j==8))) {
-          fprintf(stdout,"[hlld]: before expand: ivx=%1i e3x1f(%1i,%1i)=%10.2e\n",ivx,i,j,ey(k,j,i));
-        }
-      } else if (ivx == IVY) { // ez = e3x2.
-        if (((i==6) || (i==7)) && (j==8)) {
-          fprintf(stdout,"[hlld]: before expand: ivx=%1i e3x2f(%1i,%1i)=%10.2e\n",ivx,i,j,ez(k,j,i));
-        }
-      }
-#endif
-
     if (DUAL_ENERGY)  // IGE is pressure
       flx(IIE,k,j,i) = (flxi[IDN] >= 0 ? flxi[IDN]*wli[IGE]/wli[IDN] : flxi[IDN]*wri[IGE]/wri[IDN])*igm1;
 
@@ -501,39 +487,14 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
           eflx(n,k,j,i) = wi[IDN]*wi[n]*wallv;
         ey(k,j,i) += (wi[IBY]*wallv - bxi*wallvy); // modify ey, ez directly here. 
         ez(k,j,i) -= (wi[IBZ]*wallv - bxi*wallvz);
-        if ((i==104) && (j==jl+(ju-jl+1)/2) && (k==kl+(ku-kl+1)/2)) {
-          fprintf(stdout,"[hlld]: move    i=%3i ivx=%1i bxi=%17.9e wallv=%17.9e wallvy=%17.9e wallvz=%17.9e\n",
-                  i,ivx,bxi,wallv,wallvy,wallvz); 
-        }
       } else {
         if (v1fora2) {
           ez(k,j,i) += bxi*wallvz;
-          if ((i==104) && (j==jl+(ju-jl+1)/2) && (k==kl+(ku-kl+1)/2)) {
-            fprintf(stdout,"[hlld]: v1fora2 i=%3i ivx=%1i bxi=%17.9e wallvz=%17.9e\n",
-                    i,ivx,bxi,wallvz);
-          }
         }
         if (v1fora3) {
           ey(k,j,i) -= bxi*wallvy;
-          if ((i==104) && (j==jl+(ju-jl+1)/2) && (k==kl+(ku-kl+1)/2)) {
-            fprintf(stdout,"[hlld]: v1fora3 i=%3i ivx=%1i bxi=%17.9e wallvy=%17.9e\n",
-                    i,ivx,bxi,wallvy);
-          }
         }
       }
-#ifdef DEBUG
-      // e3x2f(6,7)=  0.00e+00 e3x2f(7,7)=  0.00e+00 e3x1f(7,6)=  0.00e+00 e3x1f(7,7)=  0.00e+00
-      // e3x2f(6,8)= -1.00e+00 e3x2f(7,8)= -1.00e+00 e3x1f(7,7)=  0.00e+00 e3x1f(7,8)=  0.00e+00
-      if (ivx == IVX) { // ey = e3x1.
-        if ((i==7) && ((j==7) || (j==8))) {
-          fprintf(stdout,"[hlld]: after  expand: ivx=%1i e3x1f(%1i,%1i)=%10.2e\n",ivx,i,j,ey(k,j,i));
-        }
-      } else if (ivx == IVY) { // ez = e3x2.
-        if (((i==6) || (i==7)) && (j==8)) {
-          fprintf(stdout,"[hlld]: after  expand: ivx=%1i e3x2f(%1i,%1i)=%10.2e\n",ivx,i,j,ez(k,j,i));
-        }
-      }
-#endif
     } // if (EXPANDING_ENABLED)
 
 

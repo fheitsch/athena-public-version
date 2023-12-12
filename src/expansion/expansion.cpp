@@ -217,10 +217,6 @@ void Expansion::IntegrateWalls(Real dt){
   AthenaArray<Real> &v2f = vf[X2DIR];
   AthenaArray<Real> &v3f = vf[X3DIR];
   if (x1Move) {
-    //for (int i=is; i<=ie+1; ++i) {
-    //  fprintf(stdout,"[IntegrateWalls]: i=%3i v1f=%17.9e dt=%17.9e xold=%17.9e xnew=%17.9e ratold=%17.9e ratnew=%17.9e\n",
-    //          i,v1f(i),dt,x1_0(i),x1_0(i)+dt*v1f(i),x1_0(i)/x1_0(i-1),(x1_0(i)+dt*v1f(i))/(x1_0(i-1)+dt*v1f(i-1)));
-    //}
 #pragma omp simd
     for (int i=il; i<=iu+1; ++i) {
       x1_0(i) += dt*v1f(i);
@@ -270,12 +266,6 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
   AthenaArray<Real> &v1f = vf[X1DIR];
   AthenaArray<Real> &v2f = vf[X2DIR];
   AthenaArray<Real> &v3f = vf[X3DIR];
-
-#ifdef DEBUG
-  for (int i=is; i<=ie; ++i) 
-    fprintf(stdout,"before: %2i dens=%13.5e %13.5e etot=%13.5e %13.5e\n",
-            i,cons(IDN,ks,js,i),cons(IDN,ks,js+32,i),cons(IEN,ks,js,i),cons(IEN,ks,js+32,i));
-#endif
 
   for (int k = ks; k<=ke;++k) {
     for (int j = js; j<=je;++j) {
@@ -328,13 +318,6 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
     }
   }
 
-#ifdef DEBUG
-  for (int i=is; i<=ie; ++i) 
-    fprintf(stdout,"after: %2i dens=%13.5e %13.5e etot=%13.5e %13.5e\n",
-            i,cons(IDN,ks,js,i),cons(IDN,ks,js+32,i),cons(IEN,ks,js,i),cons(IEN,ks,js+32,i));
-#endif
-
-
   return;
 }
 
@@ -358,12 +341,6 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
   AthenaArray<Real> &v2f = vf[X2DIR];
   AthenaArray<Real> &v3f = vf[X3DIR];
   AthenaArray<Real> &v1v = vv[X1DIR];
-
-#ifdef DEBUG
-  for (int i=is; i<=ie; ++i)
-    fprintf(stdout,"before: %2i b1=%13.5e %13.5e b2=%13.5e %13.5e\n",
-            i,b_out.x1f(ks,js,i),b_out.x1f(ks,js+32,i),b_out.x2f(ks,js,i),b_out.x2f(ks,js+32,i));
-#endif
 
   if (COORDINATE_SYSTEM == "cartesian") {
     for (int k=ks; k<=ke; ++k) { // B1
@@ -458,10 +435,6 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         for (int i=is; i<=ie+1; ++i) {
           Real darea1       = 2.0*pmb->pcoord->x1f(i)*v1f(i)*dt * dx2 * dx3; 
           areanew           = areaold(i) + darea1;
-          if ((i==104) && (j==js+(je-js+1)/2) && (k==ks+(ke-ks+1)/2)){
-            fprintf(stdout,"[RescaleField]: i=%3i ratA1=%17.9e b_old=%17.9e b_new=%17.9e\n",
-                    i,areanew/areaold(i),b_out.x1f(k,j,i),b_out.x1f(k,j,i)*areaold(i)/areanew);
-          }
           b_out.x1f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -496,13 +469,6 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
       }
     }
   }
-
-#ifdef DEBUG
-  for (int i=is; i<=ie; ++i)
-    fprintf(stdout,"after: %2i b1=%13.5e %13.5e b2=%13.5e %13.5e\n",
-            i,b_out.x1f(ks,js,i),b_out.x1f(ks,js+32,i),b_out.x2f(ks,js,i),b_out.x2f(ks,js+32,i));
-#endif
-
 
   return;
 }
@@ -567,7 +533,6 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
     for (int i=il; i<=iu+1; ++i){
       pmb->pcoord->x1f(i) = x1_0(i);
     }
-    //fprintf(stdout,"x1f=%13.5e %13.5e %13.5e ... %13.5e\n",pmb->pcoord->x1f(is-2),pmb->pcoord->x1f(is-1),pmb->pcoord->x1f(is),pmb->pcoord->x1f(ie+1));
 #pragma omp simd
     for (int i=il; i<=iu; ++i) {
       pmb->pcoord->dx1f(i) = pmb->pcoord->x1f(i+1)-pmb->pcoord->x1f(i);

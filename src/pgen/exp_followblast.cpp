@@ -1370,9 +1370,6 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             } else if (ibtype == 2) {
               pfield->b.x1f(k,j,i) = 0.0;  
             }
-            if ((j==js+(je-js+1)/2) && (k==ks+(ke-ks+1)/2)) {
-              fprintf(stdout,"i=%3i b1f_init=%17.9e\n", i,pfield->b.x1f(k,j,i));
-            }
           }
         }
       }
@@ -1553,9 +1550,6 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
       }
     }
   } 
-
-  //for (int i = is; i <= ie; ++i) 
-  //  fprintf(stdout,"i=%3i dens=%13.5e\n",i,phydro->u(IDN,32,32,i));
 
   return;
 }
