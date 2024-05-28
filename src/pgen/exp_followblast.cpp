@@ -1029,9 +1029,6 @@ void OuterX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
             b.x1f(k,j,ie+i+1) = 0.0;
           }
         }
-        //b.x1f(k,j,ie+i+1) = b0 * std::abs(std::sin(theta))
-        //                       * (   std::cos(angle) * std::cos(phi)
-        //                           + std::sin(angle) * std::sin(phi));
       }
     }
     for (int k=ks; k<=ke; ++k) {
@@ -1056,49 +1053,29 @@ void OuterX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
             b.x2f(k,j,ie+1) = bz0;
           }
         }
-        //b.x2f(k,j,ie+i) = b0 * std::cos(theta)
-        //                     * (   std::cos(angle) * std::cos(phi)
-        //                         + std::sin(angle) * std::sin(phi));
-        //if (std::sin(theta) < 0.0) 
-        //  b.x2f(k,j,ie+i) *= -1.0;
       } 
     } 
-    if (ibtype == 0) {
-      for (int k=ks; k<=ke+1; ++k) {
-        Real phi = pco->x3f(k);
-        for (int j=js; j<=je; ++j) {
-          if (ibtype == 0) {
+    for (int k=ks; k<=ke+1; ++k) {
+      Real phi = pco->x3f(k);
+      for (int j=js; j<=je; ++j) {
+        if (ibtype == 0) {
 #pragma omp simd 
-            for (int i=1; i<=ngh; ++i) {
-              b.x3f(k,j,ie+i) = - std::sin(phi)*bx0
-                                + std::cos(phi)*by0;
-            }
-          } else if (ibtype == 1) {
-#pragma omp simd 
-            for (int i=1; i<=ngh; ++i) {
-              b.x3f(k,j,ie+i) = bz0;
-            } 
-          } else if (ibtype == 2) {
-#pragma omp simd 
-            for (int i=1; i<=ngh; ++i) {
-              b.x3f(k,j,ie+i) = 0.00;
-            } 
+          for (int i=1; i<=ngh; ++i) {
+            b.x3f(k,j,ie+i) = - std::sin(phi)*bx0
+                              + std::cos(phi)*by0;
           }
-          //b.x3f(k,j,ie+i) = b0 * (   std::sin(angle) * std::cos(phi)
-          //                         - std::cos(angle) * std::sin(phi));
-        } 
-      } 
-    } else if (ibtype == 1) {
-      for (int k=ks; k<=ke+1; ++k) {
-        for (int j=js; j<=je; ++j) {
+        } else if (ibtype == 1) {
 #pragma omp simd 
           for (int i=1; i<=ngh; ++i) {
             b.x3f(k,j,ie+i) = bz0;
-            //b.x3f(k,j,ie+i) = b0 * (   std::sin(angle) * std::cos(phi)
-            //                         - std::cos(angle) * std::sin(phi));
-          }
+          } 
+        } else if (ibtype == 2) {
+#pragma omp simd 
+          for (int i=1; i<=ngh; ++i) {
+            b.x3f(k,j,ie+i) = 0.00;
+          } 
         }
-      }
+      } 
     }
   } 
   return;
@@ -1493,13 +1470,16 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             pfield->b.x1f(k,j,i) =
                 b0 * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
+            //new
+            //Real theta = pcoord->x2v(j);
+            //Real phi = pcoord->x3v(k);
+            //pfield->b.x1f(k,j,i) =   std::sin(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
+            //                       + std::cos(theta)*bz0; 
+            //original
             Real theta = pcoord->x2v(j);
             Real phi = pcoord->x3v(k);
-            pfield->b.x1f(k,j,i) =   std::sin(theta)*std::cos(phi)*bx0
-                                   + std::sin(theta)*std::sin(phi)*by0
-                                   + std::cos(theta)*bz0; 
-            //pfield->b.x1f(k,j,i) = b0 * std::abs(std::sin(theta))
-            //    * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
+            pfield->b.x1f(k,j,i) = b0 * std::abs(std::sin(theta))
+                * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
           }
         }
       }
@@ -1514,15 +1494,19 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             pfield->b.x2f(k,j,i) =
                 b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            Real theta = pcoord->x2f(j);
-            Real phi   = pcoord->x3v(k);
-            pfield->b.x2f(k,j,i) =   std::cos(theta)*std::cos(phi)*bx0
-                                   + std::cos(theta)*std::sin(phi)*by0
-                                   - std::sin(theta)*bz0;
-            //pfield->b.x2f(k,j,i) = b0 * std::cos(theta)
-            //    * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
-            //if (std::sin(theta) < 0.0)
-            //  pfield->b.x2f(k,j,i) *= -1.0;
+            //new
+            //Real theta = pcoord->x2f(j);
+            //Real phi   = pcoord->x3v(k);
+            //pfield->b.x2f(k,j,i) =   std::cos(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
+            //                       - std::sin(theta)*bz0;
+            //original
+            Real theta = pcoord->x2v(j);
+            Real phi = pcoord->x3v(k);
+            pfield->b.x2f(k,j,i) = b0 * std::cos(theta)
+                * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
+            if (std::sin(theta) < 0.0)
+              pfield->b.x2f(k,j,i) *= -1.0;
+
           }
         }
       }
@@ -1533,22 +1517,49 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           if (COORDINATE_SYSTEM == "cartesian" || COORDINATE_SYSTEM == "cylindrical") {
             pfield->b.x3f(k,j,i) = bz0;
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            Real phi = pcoord->x3f(k);
-            pfield->b.x3f(k,j,i) = - std::sin(phi)*bx0
-                                   + std::cos(phi)*by0;
-            //pfield->b.x3f(k,j,i) =
-            //    b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
+            //new
+            //Real phi = pcoord->x3f(k);
+            //pfield->b.x3f(k,j,i) = - std::sin(phi)*bx0
+            //                       + std::cos(phi)*by0;
+            //original
+            Real phi = pcoord->x3v(k);
+            pfield->b.x3f(k,j,i) =
+                b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
           }
         }
       }
     }
+    Real rx0 = 0.0;
+    Real ry0 = 0.0;
+    Real rz0 = 0.0;
+    Real cnt = 0.0;
     for (int k = ks; k <= ke; ++k) {
+      Real x3v = pcoord->x3v(k);
+      Real x3f = pcoord->x3v(k);
       for (int j = js; j <= je; ++j) {
+        Real x2v = pcoord->x2v(j);
+        Real x2f = pcoord->x2v(j);
         for (int i = is; i <= ie; ++i) {
           phydro->u(IEN,k,j,i) += 0.5*(SQR(b0)+SQR(bz0));
+          rx0 += SQR(  pfield->b.x1f(k,j,i)*std::sin(x2v)*std::cos(x3v)
+                     + pfield->b.x2f(k,j,i)*std::cos(x2f)*std::cos(x3v)
+                     - pfield->b.x3f(k,j,i)*std::sin(x3f)
+                     - bx0);
+          ry0 += SQR(  pfield->b.x1f(k,j,i)*std::sin(x2v)*std::sin(x3v)
+                     + pfield->b.x2f(k,j,i)*std::cos(x2f)*std::sin(x3v)
+                     + pfield->b.x3f(k,j,i)*std::cos(x3f) 
+                     - by0);
+          rz0 += SQR(  pfield->b.x1f(k,j,i)*std::cos(x2v)
+                     - pfield->b.x2f(k,j,i)*std::sin(x2f)
+                     - bz0);
+          cnt++; 
         }
       }
     }
+    rx0 = std::sqrt(rx0/cnt);
+    ry0 = std::sqrt(ry0/cnt);
+    rz0 = std::sqrt(rz0/cnt);
+    fprintf(stdout,"p=%3i rx0=%13.5e ry0=%13.5e rz0=%13.5e\n",Globals::my_rank,rx0,ry0,rz0);
   } 
 
   return;

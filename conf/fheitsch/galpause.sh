@@ -10,6 +10,7 @@ python3 configure.py\
                          --ns 3 \
                          --ng 4 \
                          -hdf5 \
+                         -de \
                          -mpi \
                          -exp
                           

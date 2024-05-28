@@ -145,7 +145,7 @@ Real WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> grid
 void UpdateGridData(Mesh *pm);
 
 //Global Variables for OuterX1
-Real bx0,by0,bz0;
+Real bx0,by0,bz0,expboost;
 
 void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
@@ -676,7 +676,7 @@ class CoolingFunction {
     Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real vtot, const Real zmet, const Real dt) {
       if (HeatCoolFunc(dens,temp0,vtot,zmet) == 0.0) return temp0; // Nothing to do for thermal equilibrium
       // Otherwise, temp1 and temp0 bracket the temperature down to which we should integrate.
-      const Real tol = 1e-9;
+      const Real tol = 1e-6;
       int nit = (int) (log(fabs((temp1-temp0)/(temp1+temp0))/tol)/log(2.0));
       Real T[3], L[2];
       T[0]         = temp0;
@@ -879,8 +879,8 @@ void UpdateGridData(Mesh *pm) {
   MeshBlock *pmb = pm->pblock;
   Real myVel = 0.0;
   Real cellsize = pm->mesh_size.x1max/pm->mesh_size.nx1;
-  Real posUp = 0.2*pm->mesh_size.x1max;
-  Real posLow = 0.1*pm->mesh_size.x1max;// - 15.0*cellsize;
+  Real posUp = 0.5*pm->mesh_size.x1max;
+  Real posLow = 0.4*pm->mesh_size.x1max;// - 15.0*cellsize;
   Real velAve=0.0, vol=0.0;
   while (pmb != NULL) {
     for (int k=pmb->ks; k<=pmb->ke; ++k) {
@@ -888,10 +888,11 @@ void UpdateGridData(Mesh *pm) {
         for (int i=pmb->is; i<=pmb->ie; ++i) {
           Real pos  = pmb->pcoord->x1v(i);
           Real dvol = pmb->pcoord->GetCellVolume(k,j,i);
-          if ((pos<=posUp) && (pos>=posLow)) {
-            velAve += pmb->phydro->u(IM1,k,j,i)/pmb->phydro->u(IDN,k,j,i)*dvol;
-            vol    += dvol;
-          }
+          Real w = (Real) ((pos<=posUp) && (pos>=posLow));
+          Real d  = pmb->phydro->u(IDN,k,j,i);
+          Real c2 = pmb->phydro->u(NHYDRO-NSCALARS+2,k,j,i)/d;
+          velAve += pmb->phydro->u(IM1,k,j,i)/d * dvol * c2 * w;
+          vol    += dvol * c2 * w;
         }
       }
     }
@@ -907,7 +908,7 @@ void UpdateGridData(Mesh *pm) {
   vol    = arr[1];
 #endif
 
-  velAve = velAve/vol;
+  velAve = velAve/(vol+1e-30);
     
   myVel = velAve;
   if ((myVel <=0.0)) {
@@ -918,7 +919,7 @@ void UpdateGridData(Mesh *pm) {
   //Real tref = 0.05*xMax/pparam->Vwind();
   //myVel = std::min(pm->time*pparam->Vwind()/tref,pparam->Vwind());
 
-  pm->GridData(2) = 2.0*myVel;
+  pm->GridData(2) = expboost*myVel;
   
   //fprintf(stdout,"[UpdateGridData]: vel = %17.9e xmax = %17.9e\n",pm->GridData(2),pm->GridData(3));
   return;
@@ -1286,6 +1287,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   icool     = pin->GetOrAddInteger("problem","icool",0); // 0: no cooling, 1: power-law cooling, 2: WSS09 cooling
   turbcool  = pin->GetOrAddReal("problem","turbcool",0.0); // add turbulent heating
+  expboost  = pin->GetOrAddReal("problem","expboost",1.0); // 2.0 works ok for full angle. 
   // potential parameters
   Real vesc = pin->GetReal("problem","vesc"); // km/s 
   Real temp = pin->GetReal("problem","temp0");
