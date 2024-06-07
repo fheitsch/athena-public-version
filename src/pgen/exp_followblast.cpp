@@ -1471,15 +1471,16 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
                 b0 * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
             //new
-            //Real theta = pcoord->x2v(j);
-            //Real phi = pcoord->x3v(k);
-            //pfield->b.x1f(k,j,i) =   std::sin(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
-            //                       + std::cos(theta)*bz0; 
-            //original
             Real theta = pcoord->x2v(j);
             Real phi = pcoord->x3v(k);
-            pfield->b.x1f(k,j,i) = b0 * std::abs(std::sin(theta))
-                * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
+            pfield->b.x1f(k,j,i) =   std::sin(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
+                                   + std::cos(theta)*bz0; 
+            //original
+            //Real theta = pcoord->x2v(j);
+            //Real phi = pcoord->x3v(k);
+            //pfield->b.x1f(k,j,i) = b0 * std::abs(std::sin(theta))
+            //    * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi))
+            //    + std::cos(theta)*bz0;
           }
         }
       }
@@ -1495,17 +1496,17 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
                 b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
             //new
-            //Real theta = pcoord->x2f(j);
-            //Real phi   = pcoord->x3v(k);
-            //pfield->b.x2f(k,j,i) =   std::cos(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
-            //                       - std::sin(theta)*bz0;
+            Real theta = pcoord->x2f(j);
+            Real phi   = pcoord->x3v(k);
+            pfield->b.x2f(k,j,i) =   std::cos(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
+                                   - std::sin(theta)*bz0;
             //original
-            Real theta = pcoord->x2v(j);
-            Real phi = pcoord->x3v(k);
-            pfield->b.x2f(k,j,i) = b0 * std::cos(theta)
-                * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
-            if (std::sin(theta) < 0.0)
-              pfield->b.x2f(k,j,i) *= -1.0;
+            //Real theta = pcoord->x2v(j);
+            //Real phi = pcoord->x3v(k);
+            //pfield->b.x2f(k,j,i) = b0 * std::cos(theta)
+            //    * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
+            //if (std::sin(theta) < 0.0)
+            //  pfield->b.x2f(k,j,i) *= -1.0;
 
           }
         }
@@ -1518,13 +1519,13 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             pfield->b.x3f(k,j,i) = bz0;
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
             //new
-            //Real phi = pcoord->x3f(k);
-            //pfield->b.x3f(k,j,i) = - std::sin(phi)*bx0
-            //                       + std::cos(phi)*by0;
+            Real phi = pcoord->x3f(k);
+            pfield->b.x3f(k,j,i) = - std::sin(phi)*bx0
+                                   + std::cos(phi)*by0;
             //original
-            Real phi = pcoord->x3v(k);
-            pfield->b.x3f(k,j,i) =
-                b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
+            //Real phi = pcoord->x3v(k);
+            //pfield->b.x3f(k,j,i) =
+            //    b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
           }
         }
       }
