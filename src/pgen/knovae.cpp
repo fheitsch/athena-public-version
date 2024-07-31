@@ -32,12 +32,453 @@
 // global variables
 FILE *otffile;
 
+//========================================================================================
+// Time Dependent Grid Functions
+//  \brief Functions for time dependent grid, including two example boundary conditions
+//========================================================================================
+Real WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> gridData);
+void UpdateGridData(Mesh *pm);
+//Global variables for GridUpdate
+int ivexp, iweight;
+int maxntrack = 20;
+int ncycold=-1;
+Real vtrack0, boost,x1rat;
+AthenaArray<Real> ttrack,rtrack;
+
+//Global Variables for OuterX1
+int ibtype;
+Real ambdens, ambvel, ambpres, drat, prat;
+Real b0, bx0, by0, bz0, angle;
+// The expanding grid requires user-defined boundary functions only for axes
+// along which expansion is possible. 
+void OuterX1_Cartesian(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+void OuterX2_Cartesian(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+void OuterX3_Cartesian(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+
+void InnerX1_Cartesian(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+void InnerX2_Cartesian(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+void InnerX3_Cartesian(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+
+void OuterX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+void InnerX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+     FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+
+
 //====================================================================================
 // local functions
 Real LogMeshSpacingX1(Real x, RegionSize rs);
 
 void ReflectInnerX1_nonuniform(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
+
+//========================================================================================
+//! \fn void WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> gridData)
+//  \brief Function that returns the velocity of cell wall i at location xf. Time, total
+//  time step and direction are all given. Direction is one of 0,1,2, corresponding to x1,x2,x3
+//  and gridData is an athena array that contains overall mesh data. gridData is updated
+//  before every time sub-step by the UpdateGridData function. Some instances do not need
+//  this data to be updated and the UpdateGridData function can be left blank. The gridData
+//  array is supposed to carry all mesh-level information, i.e. the information used for 
+//  multiple cell walls in the simulation.
+//========================================================================================
+Real WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> gridData) {
+  Real retval = 0.0;
+
+  if (COORDINATE_SYSTEM == "cartesian") {
+    if (dir == gridData(1)){
+      if ((xf > 0.0)&&(gridData(3)>0.0)){
+        if (gridData(2)==0.0) retval = 0.0;
+        else retval = gridData(2) * xf/gridData(3);
+      } else if ((xf < 0.0)&&(gridData(0)<0.0)){
+        if (gridData(2) == 0.0) retval = 0.0;
+        else retval = -1.0*gridData(2) * xf/gridData(0);
+      }
+    } else if (dir == gridData(5)) {
+      if ((xf > 0.0)&&(gridData(7)>0.0)){
+        if (gridData(6)==0.0) retval = 0.0;
+        else retval = gridData(6) * xf/gridData(7);
+      } else if ((xf < 0.0)&&(gridData(4)<0.0)){
+        if (gridData(6) == 0.0) retval = 0.0;
+        else retval = -1.0*gridData(6) * xf/gridData(4);
+      }
+    } else if (dir == gridData(9)) {
+      if ((xf > 0.0)&&(gridData(11)>0.0)){
+        if (gridData(10)==0.0) retval = 0.0;
+        else retval = gridData(10) * xf/gridData(11);
+      } else if ((xf < 0.0)&&(gridData(8)<0.0)){
+        if (gridData(10) == 0.0) retval = 0.0;
+        else retval = -1.0*gridData(10) * xf/gridData(8);
+      }
+    }
+  } else if (COORDINATE_SYSTEM == "cylindrical") {
+    if (dir != gridData(1)){
+      retval = 0.0;
+    } else if (xf<=gridData(0)){
+      retval = 0.0;
+    } else if (xf > gridData(0)){
+      if (gridData(2)==0.0) retval = 0.0;
+      else retval = gridData(2) * (xf-gridData(0))/(gridData(3)-gridData(0));
+    }
+  } else if (COORDINATE_SYSTEM == "spherical_polar") {
+    if (dir == gridData(1)) {
+      if (gridData(2) != 0.0) {
+        Real x;
+        if (x1rat < 0.0) { // for PowerGridX1, the velocities must be adapted (p. 63)
+          x      = std::log(xf/gridData(0))/std::log(gridData(3)/gridData(0));
+          retval = x * std::pow(gridData(3)/gridData(0),x-1.0) * gridData(2);
+          //vf = s*(r1/r0)**(s-1)*vex
+        } else {
+          x      = (xf-gridData(0))/(gridData(3)-gridData(0));
+          retval = gridData(2) * x;
+        }
+      }
+    }
+  }
+  return retval;
+}
+
+//========================================================================================
+//! \fn void UpdateGridData(Mesh *pm)
+//  \brief Function which can edit and calculate any terms in gridData, which is used 
+//  in the WallVel function. The object in mesh is GridData(i) and i can range over the
+//  integers, limited by SetGridData argument in InitMeshUserData. See exp_blast for an 
+//  example use of this function.
+//  This is an example function, showing various options of expansion tracking.
+//    iweight    ==  0: no weight
+//    iweight    ==  1: density
+//    iweight    ==  2: first scalar
+//    iweight    ==  3: thermal pressure
+//    iweight    ==  4: magnetic pressure
+//    iweight    ==  5: vrad
+//    iweight    == -1: density gradient
+//    iweight    == -2: first scalar gradient
+//    iweight    == -3: pressure gradient
+//    iweight    == -4: magnetic pressure gradient
+//    iweight    == -5: vrad gradient
+//  
+//    ivexp      ==  0: expansion velocity set to constant vtrack0
+//    ivexp      ==  1: expansion velocity via radial velocity
+//    ivexp      ==  2: expansion velocity via radius: calculate velocity via finite differences
+//
+//  For hydrodynamics, iweight = -3 and ivexp = 2 (tracking on pressure gradient position)
+//  works well, for MHD, iweight = -4 and ivexp = 2 keeps fast magnetosonic mode in box.
+//  Both work well with boost = 1.0.
+//
+//  Since the expansion velocity is calculated at the location of the shell, it needs
+//  to be rescaled by xmax/mrad, where mrad is the (weighted) radius corresponding to the 
+//  location of vrad. 
+//========================================================================================
+void UpdateGridData(Mesh *pm) {
+  MeshBlock *pmb = pm->pblock;
+  Real vtrack = 0.0;
+  Real gamma  = pmb->peos->GetGamma();
+  int ntr=0;
+
+  if (COORDINATE_SYSTEM == "cartesian") {
+    pm->GridData(3)  = pm->mesh_size.x1max;
+    pm->GridData(0)  = pm->mesh_size.x1min;
+    pm->GridData(7)  = pm->mesh_size.x2max;
+    pm->GridData(4)  = pm->mesh_size.x2min;
+    pm->GridData(11) = pm->mesh_size.x3max;
+    pm->GridData(8)  = pm->mesh_size.x3min;
+  } else {
+    pm->GridData(3) = pm->mesh_size.x1max;
+  }
+  if (ivexp == 0) { // constant velocity 
+    vtrack = vtrack0;
+  } else { // if (ivexp == 0)
+    AthenaArray<Real> weight, quant, radius;
+    Real totweight = 0.0, totquant = 0.0, totradius = 0.0;
+    while (pmb != NULL) {
+      int is=pmb->is, ie=pmb->ie, js=pmb->js, je=pmb->je, ks=pmb->ks, ke=pmb->ke;
+      if (pmb->block_size.nx3 > 1) {
+        weight.NewAthenaArray(pmb->block_size.nx3+2*NGHOST,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        quant.NewAthenaArray(pmb->block_size.nx3+2*NGHOST,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        radius.NewAthenaArray(pmb->block_size.nx3+2*NGHOST,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+      } else {
+        weight.NewAthenaArray(1,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        quant.NewAthenaArray(1,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        radius.NewAthenaArray(1,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+      }
+      if (ivexp == 1) { // radial velocity
+        for (int k=ks; k<=ke; ++k) {
+          Real z = pmb->pcoord->x3v(k);
+          for (int j=js; j<=je; ++j) {
+            Real y = pmb->pcoord->x2v(j);
+#pragma omp simd
+            for (int i=is; i<=ie; ++i) {
+              Real x    = pmb->pcoord->x1v(i);
+              Real vrad, rad;
+              if (COORDINATE_SYSTEM == "cartesian") {
+                rad  = std::sqrt(SQR(x)+SQR(y)+SQR(z));
+                vrad =  (  pmb->phydro->u(IM1,k,j,i)*x
+                         + pmb->phydro->u(IM2,k,j,i)*y
+                         + pmb->phydro->u(IM3,k,j,i)*z)
+                       / (pmb->phydro->u(IDN,k,j,i)*rad);
+              } else {
+                vrad = pmb->phydro->u(IM1,k,j,i)/pmb->phydro->u(IDN,k,j,i);
+              }
+              quant(k,j,i)  = vrad;
+              radius(k,j,i) = rad;
+            }
+          }
+        }
+      } else if (ivexp == 2) { //radius
+        for (int k=ks; k<=ke; ++k) {
+          Real z = pmb->pcoord->x3v(k);
+          for (int j=js; j<=je; ++j) {
+            Real y = pmb->pcoord->x2v(j);
+#pragma omp simd
+            for (int i=is; i<=ie; ++i) {
+              Real x    = pmb->pcoord->x1v(i);
+              Real rad;
+              if (COORDINATE_SYSTEM == "cartesian") {
+                rad  = std::sqrt(SQR(x)+SQR(y)+SQR(z));
+              } else {
+                rad = x;
+              }
+              quant(k,j,i)  = rad;
+              radius(k,j,i) = rad;
+            }
+          }
+        }
+      }
+
+      if (fabs(iweight) == 0) { // no weight
+        for (int k=ks; k<=ke; ++k) {
+          for (int j=js; j<=je; ++j) {
+#pragma omp simd
+            for (int i=is; i<=ie; ++i) {
+              weight(k,j,i) = 1.0;
+            }
+          }
+        }
+      } else if (fabs(iweight) == 1) { // density
+        for (int k=ks; k<=ke; ++k) {
+          for (int j=js; j<=je; ++j) {
+#pragma omp simd
+            for (int i=is; i<=ie; ++i) {
+              weight(k,j,i) = pmb->phydro->u(IDN,k,j,i);
+            }
+          }
+        }
+      } else if (fabs(iweight) == 2) { // first scalar
+         for (int k=ks; k<=ke; ++k) {
+          for (int j=js; j<=je; ++j) {
+#pragma omp simd
+            for (int i=is; i<=ie; ++i) {
+              weight(k,j,i) = pmb->phydro->u(NHYDRO-NSCALARS,k,j,i);
+            }
+          }
+        }
+      } else if (fabs(iweight) == 3) { // thermal pressure
+        if (DUAL_ENERGY) {
+          for (int k=ks; k<=ke; ++k) {
+            for (int j=js; j<=je; ++j) {
+#pragma omp simd
+              for (int i=is; i<=ie; ++i) {
+                weight(k,j,i) = pmb->phydro->u(IIE,k,j,i);
+              }
+            }
+          }
+        } else {
+          for (int k=ks; k<=ke; ++k) {
+            for (int j=js; j<=je; ++j) {
+#pragma omp simd
+              for (int i=is; i<=ie; ++i) {
+                Real ekin = 0.5*( SQR(pmb->phydro->u(IM1,k,j,i))
+                                 +SQR(pmb->phydro->u(IM2,k,j,i))
+                                 +SQR(pmb->phydro->u(IM3,k,j,i)))
+                               / pmb->phydro->u(IDN,k,j,i);
+                Real emag = 0.0;
+                if (MAGNETIC_FIELDS_ENABLED) {
+                  emag = 0.5*( SQR(pmb->pfield->bcc(IB1,k,j,i))
+                              +SQR(pmb->pfield->bcc(IB2,k,j,i))
+                              +SQR(pmb->pfield->bcc(IB3,k,j,i)));
+                }
+                weight(k,j,i) = pmb->phydro->u(IEN,k,j,i)-ekin-emag;
+              }
+            }
+          }
+        }
+      } else if (fabs(iweight) == 4) { // magnetic pressure
+        if (MAGNETIC_FIELDS_ENABLED) {
+          for (int k=ks; k<=ke; ++k) {
+            for (int j=js; j<=je; ++j) {
+#pragma omp simd
+              for (int i=is; i<=ie; ++i) {
+                weight(k,j,i) = SQR(pmb->pfield->bcc(IB1,k,j,i))
+                               +SQR(pmb->pfield->bcc(IB2,k,j,i))
+                               +SQR(pmb->pfield->bcc(IB3,k,j,i));
+              }
+            }
+          }
+        }
+      }
+
+      if (iweight > 0) { // straight weights
+        for (int k=ks; k<=ke; ++k) {
+          for (int j=js; j<=je; ++j) {
+            for (int i=is; i<=ie; ++i) {
+              Real q = quant(k,j,i);
+              Real r = radius(k,j,i);
+              Real v = pmb->pcoord->GetCellVolume(k,j,i);
+              Real w = weight(k,j,i);
+              w           *= v;
+              q           *= w;
+              r           *= w;
+              totquant    += q;
+              totweight   += w;
+              totradius   += r;
+            }
+          }
+        }
+      } else { // if (iweight > 0): gradients
+        if (pmb->block_size.nx3 > 1) { // 3D
+          for (int k=ks+1; k<=ke-1; ++k) {
+            Real z = pmb->pcoord->x3v(k);
+            Real zm= pmb->pcoord->x3v(k-1);
+            Real zp= pmb->pcoord->x3v(k+1);
+            for (int j=js+1; j<=je-1; ++j) {
+              Real y = pmb->pcoord->x2v(j);
+              Real ym= pmb->pcoord->x2v(j-1);
+              Real yp= pmb->pcoord->x2v(j+1);
+#pragma omp simd
+              for (int i=is+1; i<=ie-1; ++i) {
+                Real x      = pmb->pcoord->x1v(i);
+                Real xm     = pmb->pcoord->x1v(i-1);
+                Real xp     = pmb->pcoord->x1v(i+1);
+                Real gx     = (weight(k  ,j  ,i+1)-weight(k  ,j  ,i-1))/(xp-xm);
+                Real gy     = (weight(k  ,j+1,i  )-weight(k  ,j-1,i  ))/(yp-ym);
+                Real gz     = (weight(k+1,j  ,i  )-weight(k-1,j  ,i  ))/(zp-zm);
+                Real q      = quant(k,j,i);
+                Real r      = radius(k,j,i);
+                Real w      = std::fabs((gx*x+gy*y+gz*z)/r);
+                q          *= w;
+                r          *= w;
+                totquant   += q;
+                totweight  += w;
+                totradius  += r;
+              }
+            }
+          }
+        } else { // two dimensions
+          if (COORDINATE_SYSTEM == "cartesian") {
+            for (int j=js+1; j<=je-1; ++j) {
+              Real y = pmb->pcoord->x2v(j);
+              Real ym= pmb->pcoord->x2v(j-1);
+              Real yp= pmb->pcoord->x2v(j+1);
+#pragma omp simd
+              for (int i=is+1; i<=ie-1; ++i) {
+                Real x        = pmb->pcoord->x1v(i);
+                Real xm       = pmb->pcoord->x1v(i-1);
+                Real xp       = pmb->pcoord->x1v(i+1);
+                Real gx       = (weight(ks ,j  ,i+1)-weight(ks ,j  ,i-1))/(xp-xm);
+                Real gy       = (weight(ks ,j+1,i  )-weight(ks ,j-1,i  ))/(yp-ym);
+                Real q        = quant(ks,j,i);
+                Real r        = radius(ks,j,i);
+                Real w        = std::fabs((gx*x+gy*y)/r);
+                q            *= w;
+                r            *= w;
+                totquant     += q;
+                totweight    += w;
+                totradius    += r;
+              }
+            }
+          } else if (COORDINATE_SYSTEM == "spherical_polar") {
+            for (int j=js; j<=je; ++j) { // only radial gradient here, hence use whole j range
+#pragma omp simd
+              for (int i=is+1; i<=ie-1; ++i) {
+                Real gr    =   (weight(ks ,j, i+1)-weight(ks ,j, i-1))
+                              /(pmb->pcoord->x1v(i+1)-pmb->pcoord->x1v(i-1));
+                Real q     = quant(ks,j,i);
+                Real r     = radius(ks,j,i);
+                Real w     = std::fabs(gr);
+                q         *= w;
+                r         *= w;
+                totquant  += q;
+                totweight += w;
+                totradius += r;
+              }
+            }
+          } else {
+            fprintf(stdout,"Cylindrical coordinates not supported for gradient tracking.\n");
+            stop_this();
+          }
+        }
+      } // if (iweight > 0)
+      weight.DeleteAthenaArray();
+      quant.DeleteAthenaArray();
+      radius.DeleteAthenaArray();
+      pmb = pmb->next;
+    } // while (pmb != NULL)
+
+    // now totquant and totweight contain the summed rad or vrad, and the appropriate normalization
+#ifdef MPI_PARALLEL
+    Real myval[3];
+    myval[0] = totquant;
+    myval[1] = totradius;
+    myval[2] = totweight;
+    MPI_Allreduce(MPI_IN_PLACE,&myval,3,MPI_ATHENA_REAL,MPI_SUM,
+                  MPI_COMM_WORLD);
+    totquant  = myval[0];
+    totradius = myval[1];
+    totweight = myval[2];
+#endif
+    totquant /= totweight;
+    totradius/= totweight;
+    if (ivexp == 1) { // use weighted radial velocity to determine vtrack
+      vtrack  = totquant;
+      vtrack  = ((vtrack < 0.0) ? 0.0 : vtrack);
+      vtrack *= (pm->GridData(3)/totradius); // boost velocity
+    } else if (ivexp == 2) { // use weighted radius to determine vtrack
+      ntr = (pm->ncycle >= maxntrack) ? maxntrack-1 : pm->ncycle; // number of elements to track
+      if (ncycold < pm->ncycle) { // do not update during substep
+        ncycold = pm->ncycle;
+        if (ntr == 0) { // first iteration
+          ttrack(0) = 0.0;
+          rtrack(0) = totquant;
+          vtrack    = 0.0;
+        } else { // all subsequent iterations
+          for (int m=0; m<ntr; ++m) { // shift old elements 
+            ttrack(ntr-m) = ttrack(ntr-m-1);
+            rtrack(ntr-m) = rtrack(ntr-m-1);
+          }
+          ttrack(0) = pm->time; // add new element
+          rtrack(0) = totquant;
+        }
+      }
+      vtrack = 0.0;
+      for (int m=1; m<ntr; ++m) { // calculate front velocity as average over tracking elements
+        Real vt = (rtrack(m-1)-rtrack(m))/(ttrack(m-1)-ttrack(m)) * (pm->GridData(3)/totradius);
+        vtrack += vt;
+      }
+      if (ntr > 0) vtrack /= ntr;
+    }
+    vtrack = (vtrack <= 0.0) ? 0.0 : vtrack; // enforce expansion
+    //if (Globals::my_rank == 0)
+    //  fprintf(stdout,"[UpdateGrid] vtrack=%13.5e rtrack=%13.5e xmax =%13.5e\n", vtrack,totquant,pm->GridData(3));
+  } // if (ivexp == 0)
+
+  vtrack *= boost;
+
+  pm->GridData(2) = vtrack;
+  if (COORDINATE_SYSTEM=="cartesian") {
+    pm->GridData( 6) = vtrack;
+    pm->GridData(10) = vtrack;
+  }
+
+  return;
+}
+
+// DOWN TO HERE.
 
 //====================================================================================
 // Enroll user-specific functions

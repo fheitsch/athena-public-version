@@ -485,6 +485,7 @@ void UpdateGridData(Mesh *pm) {
         vtrack += vt;
       }
       if (ntr > 0) vtrack /= ntr;
+      if (ntr < maxntrack-1) vtrack = 0.0; // Prevent oscillations due to poor statistics early on. 
     }
     vtrack = (vtrack <= 0.0) ? 0.0 : vtrack; // enforce expansion
     //if (Globals::my_rank == 0)
@@ -1530,37 +1531,18 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         }
       }
     }
-    Real rx0 = 0.0;
-    Real ry0 = 0.0;
-    Real rz0 = 0.0;
-    Real cnt = 0.0;
-    for (int k = ks; k <= ke; ++k) {
-      Real x3v = pcoord->x3v(k);
-      Real x3f = pcoord->x3v(k);
-      for (int j = js; j <= je; ++j) {
-        Real x2v = pcoord->x2v(j);
-        Real x2f = pcoord->x2v(j);
-        for (int i = is; i <= ie; ++i) {
-          phydro->u(IEN,k,j,i) += 0.5*(SQR(b0)+SQR(bz0));
-          rx0 += SQR(  pfield->b.x1f(k,j,i)*std::sin(x2v)*std::cos(x3v)
-                     + pfield->b.x2f(k,j,i)*std::cos(x2f)*std::cos(x3v)
-                     - pfield->b.x3f(k,j,i)*std::sin(x3f)
-                     - bx0);
-          ry0 += SQR(  pfield->b.x1f(k,j,i)*std::sin(x2v)*std::sin(x3v)
-                     + pfield->b.x2f(k,j,i)*std::cos(x2f)*std::sin(x3v)
-                     + pfield->b.x3f(k,j,i)*std::cos(x3f) 
-                     - by0);
-          rz0 += SQR(  pfield->b.x1f(k,j,i)*std::cos(x2v)
-                     - pfield->b.x2f(k,j,i)*std::sin(x2f)
-                     - bz0);
-          cnt++; 
+
+    pfield->CalculateCellCenteredField(pfield->b, pfield->bcc,
+                                       pcoord, is, ie, js, je, ks, ke);
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          phydro->u(IEN,k,j,i) += 0.5*( SQR(pfield->bcc(IB1,k,j,i))
+                                       +SQR(pfield->bcc(IB2,k,j,i))
+                                       +SQR(pfield->bcc(IB3,k,j,i)));
         }
       }
     }
-    rx0 = std::sqrt(rx0/cnt);
-    ry0 = std::sqrt(ry0/cnt);
-    rz0 = std::sqrt(rz0/cnt);
-    fprintf(stdout,"p=%3i rx0=%13.5e ry0=%13.5e rz0=%13.5e\n",Globals::my_rank,rx0,ry0,rz0);
   } 
 
   return;
@@ -1576,16 +1558,31 @@ void Mesh::UserWorkInLoop(void) {
     }
   }
 
+  bool fail = false, allfail = false;
+
   MeshBlock *pmb=pblock;
+
+  // For spherical-polar coordinate print diagnostic values of radial and angular resolution
+  if ((EXPANDING_ENABLED) && (COORDINATE_SYSTEM == "spherical_polar")) {
+    if (Globals::my_rank==0) {
+      if (x1rat < 0.0) {
+        Real nx2exp = (PI*std::pow(mesh_size.x1max/mesh_size.x1min,0.5/mesh_size.nx1))
+                     /(std::pow(mesh_size.x1max/mesh_size.x1min,1.0/mesh_size.nx1)-1.0);
+        fprintf(stdout,"[UserWorkInLoop]: rmax = %13.5e nx2exp/nx2 = %13.5e\n",mesh_size.x1max,nx2exp/((Real) mesh_size.nx2));
+      } else {
+        fprintf(stdout,"[UserWorkInLoop]: rmax = %13.5e\n",mesh_size.x1max);
+      }
+    }
+  }
 
   while (pmb != NULL) { // collect results from individual pmbs
     for (int k=pmb->ks; k<=pmb->ke; k++) {
       for (int j=pmb->js; j<=pmb->je; j++) {
         for (int i=pmb->is; i<=pmb->ie; i++) {
-          bool fail =    isnan(pmb->phydro->u(IEN,k,j,i))
-                      || isnan(pmb->phydro->u(IDN,k,j,i))
-                      || (pmb->phydro->u(IEN,k,j,i) <= 0.0)
-                      || (pmb->phydro->u(IDN,k,j,i) <= 0.0);
+          fail =    isnan(pmb->phydro->u(IEN,k,j,i))
+                 || isnan(pmb->phydro->u(IDN,k,j,i))
+                 || (pmb->phydro->u(IEN,k,j,i) <= 0.0)
+                 || (pmb->phydro->u(IDN,k,j,i) <= 0.0);
           if (DUAL_ENERGY) {
             fail = fail || isnan(pmb->phydro->u(IIE,k,j,i)) || (pmb->phydro->u(IIE,k,j,i) <= 0.0);
           }
@@ -1609,11 +1606,20 @@ void Mesh::UserWorkInLoop(void) {
                         << std::endl;
             }
           }
+          allfail = (fail || allfail);
         }
       }
     }
     pmb = pmb->next;
   } 
+
+#ifdef MPI_PARALLEL
+  int ierr = MPI_Allreduce(MPI_IN_PLACE,&allfail,1,MPI_C_BOOL,MPI_LOR,MPI_COMM_WORLD);
+#endif
+  if (allfail) {
+    std::cout << "[UserWorkInLoop]: failure" << std::endl;
+    stop_this();
+  }
 
   return;
 }

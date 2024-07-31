@@ -56,7 +56,7 @@ Real Hydro::NewBlockTimeStep(void) {
   AthenaArray<Real> &evel2 = pmb->pex->vv[(IVY-1)];
   AthenaArray<Real> &evel3 = pmb->pex->vv[(IVZ-1)];
   Real ev1=0.0, ev2=0.0, ev3=0.0;
-  const Real safe = 8.0;
+  const Real safe = 2.0;
 
   AthenaArray<Real> dt1, dt2, dt3;
   dt1.InitWithShallowCopy(dt1_);
@@ -127,22 +127,95 @@ Real Hydro::NewBlockTimeStep(void) {
           }
           else if (MAGNETIC_FIELDS_ENABLED) { // hydro + mhd
 
+            if (TIMESTEPINFO_ENABLED) { // extra work so we can distinguish between hydro and MHD
+              Real cs = pmb->peos->SoundSpeed(wi);
+              if (dt1(i)/cs < pmb->all_min_dts(0)) { // sound speed
+                pmb->all_min_dts(0)   = dt1(i)/cs;
+                pmb->all_min_loc(0,0) = pmb->pcoord->x1v(i);
+                pmb->all_min_loc(0,1) = pmb->pcoord->x2v(j);
+                pmb->all_min_loc(0,2) = pmb->pcoord->x3v(k);
+                pmb->all_min_ind(0,0) = i;
+                pmb->all_min_ind(0,1) = j;
+                pmb->all_min_ind(0,2) = k;
+              }
+              if (fabs(dt1(i)/wi[IVX]) < pmb->all_min_dts(1)) { // x1-velocity
+                pmb->all_min_dts(1)   = fabs(dt1(i)/wi[IVX]);
+                pmb->all_min_loc(1,0) = pmb->pcoord->x1v(i);
+                pmb->all_min_loc(1,1) = pmb->pcoord->x2v(j);
+                pmb->all_min_loc(1,2) = pmb->pcoord->x3v(k);
+                pmb->all_min_ind(1,0) = i;
+                pmb->all_min_ind(1,1) = j;
+                pmb->all_min_ind(1,2) = k;
+              }
+              if (fabs(dt2(i)/wi[IVY]) < pmb->all_min_dts(2)) { // x2-velocity
+                pmb->all_min_dts(2)   = fabs(dt2(i)/wi[IVY]);
+                pmb->all_min_loc(2,0) = pmb->pcoord->x1v(i);
+                pmb->all_min_loc(2,1) = pmb->pcoord->x2v(j);
+                pmb->all_min_loc(2,2) = pmb->pcoord->x3v(k);
+                pmb->all_min_ind(2,0) = i;
+                pmb->all_min_ind(2,1) = j;
+                pmb->all_min_ind(2,2) = k;
+              }
+              if (fabs(dt3(i)/wi[IVZ]) < pmb->all_min_dts(3)) { // x3-velocity
+                pmb->all_min_dts(3)   = fabs(dt3(i)/wi[IVZ]);
+                pmb->all_min_loc(3,0) = pmb->pcoord->x1v(i);
+                pmb->all_min_loc(3,1) = pmb->pcoord->x2v(j);
+                pmb->all_min_loc(3,2) = pmb->pcoord->x3v(k);
+                pmb->all_min_ind(3,0) = i;
+                pmb->all_min_ind(3,1) = j;
+                pmb->all_min_ind(3,2) = k;
+              }
+            }
+
             Real bx = bcc(IB1,k,j,i) + fabs(b_x1f(k,j,i)-bcc(IB1,k,j,i));
             wi[IBY] = bcc(IB2,k,j,i);
             wi[IBZ] = bcc(IB3,k,j,i);
             Real cf = pmb->peos->FastMagnetosonicSpeed(wi,bx);
+            if (TIMESTEPINFO_ENABLED) {
+              if (dt1(i)/cf < pmb->all_min_dts(4)) { // a1-velocity
+                pmb->all_min_dts(4)   = dt1(i)/cf;
+                pmb->all_min_loc(4,0) = pmb->pcoord->x1v(i);
+                pmb->all_min_loc(4,1) = pmb->pcoord->x2v(j);
+                pmb->all_min_loc(4,2) = pmb->pcoord->x3v(k);
+                pmb->all_min_ind(4,0) = i;
+                pmb->all_min_ind(4,1) = j;
+                pmb->all_min_ind(4,2) = k;
+              }
+            }
             dt1(i) /= (fabs(wi[IVX]) + cf + ev1);
 
             wi[IBY] = bcc(IB3,k,j,i);
             wi[IBZ] = bcc(IB1,k,j,i);
             bx = bcc(IB2,k,j,i) + fabs(b_x2f(k,j,i)-bcc(IB2,k,j,i));
             cf = pmb->peos->FastMagnetosonicSpeed(wi,bx);
+            if (TIMESTEPINFO_ENABLED) {
+              if (dt2(i)/cf < pmb->all_min_dts(5)) { // a2-velocity
+                pmb->all_min_dts(5)   = dt2(i)/cf;
+                pmb->all_min_loc(5,0) = pmb->pcoord->x1v(i);
+                pmb->all_min_loc(5,1) = pmb->pcoord->x2v(j);
+                pmb->all_min_loc(5,2) = pmb->pcoord->x3v(k);
+                pmb->all_min_ind(5,0) = i;
+                pmb->all_min_ind(5,1) = j;
+                pmb->all_min_ind(5,2) = k;
+              }
+            }
             dt2(i) /= (fabs(wi[IVY]) + cf + ev2);
 
             wi[IBY] = bcc(IB1,k,j,i);
             wi[IBZ] = bcc(IB2,k,j,i);
             bx = bcc(IB3,k,j,i) + fabs(b_x3f(k,j,i)-bcc(IB3,k,j,i));
             cf = pmb->peos->FastMagnetosonicSpeed(wi,bx);
+            if (TIMESTEPINFO_ENABLED) {
+              if (dt3(i)/cf < pmb->all_min_dts(6)) { // a1-velocity
+                pmb->all_min_dts(6)   = dt3(i)/cf;
+                pmb->all_min_loc(6,0) = pmb->pcoord->x1v(i);
+                pmb->all_min_loc(6,1) = pmb->pcoord->x2v(j);
+                pmb->all_min_loc(6,2) = pmb->pcoord->x3v(k);
+                pmb->all_min_ind(6,0) = i;
+                pmb->all_min_ind(6,1) = j;
+                pmb->all_min_ind(6,2) = k;
+              }
+            }
             dt3(i) /= (fabs(wi[IVZ]) + cf + ev3);
 
           } 
@@ -251,8 +324,6 @@ Real Hydro::NewBlockTimeStep(void) {
 
   //fprintf(stdout,"[NewBlockTimeStep]: min_dt after  = %13.5e\n",min_dt);
 
-  //fprintf(stdout,"[new_block_dt]: WARNING WARNING WARNING: timestep set to 1e-2\n");
-  //min_dt = 1e-2;
   pmb->new_block_dt=min_dt;
 
   return min_dt;

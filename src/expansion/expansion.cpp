@@ -981,7 +981,6 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
   Real overStep = 0.0;
   //fprintf(stdout,"[GridTimeStep]: Called\n");
   if (x1Move) {
-    //for (int i = il; i<=iu+1;i++){
     for (int i = is; i<=ie+1;i++){
       nextPosDelta = pmesh->GridDiffEq_(pmb->pcoord->x1f(i),i,pmesh->time,mydt,1,pmesh->GridData)*mydt;
 
@@ -994,6 +993,7 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
       nextPosDelta = fabs(nextPosDelta);
 
       if (nextPosDelta != 0.0 && minCellSize != 0.0){
+        // old version
         overStep = minCellSize - nextPosDelta;
         count = 0;
         while (overStep <= 0){
@@ -1007,7 +1007,8 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
             count = 0;
           }
         }
-        dtEx = mydt;//*pmesh->cfl_number;//fabs(minCellSize* 0.5/nextPosDelta * (pmesh->dt));
+        //mydt = 0.5*minCellSize/pmesh->GridDiffEq_(pmb->pcoord->x1f(i),i,pmesh->time,mydt,1,pmesh->GridData);
+        dtEx = mydt;
         min_dt1 = std::min(min_dt1, dtEx);
         //fprintf(stdout,"[GridTimeStep]: i=%4i count=%3i overStep=%13.5e mydt=%13.5e min_dt1=%13.5e\n",i,count,overStep,mydt,min_dt1);
       } else {
@@ -1028,7 +1029,6 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
 
   if (x2Move) {
     mydt = 2.0*pmesh->dt;
-    //for (int j = jl; j<=ju+1; j++){
     for (int j = js; j<=je+1; j++){
       nextPosDelta = pmesh->GridDiffEq_(pmb->pcoord->x2f(j),j,pmesh->time,mydt,2,pmesh->GridData)*mydt;
 
@@ -1054,7 +1054,7 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
             count = 0.0;
           }
         }
-        dtEx = mydt;//*pmesh->cfl_number;//fabs(minCellSize* 0.5/nextPosDelta * (pmesh->dt));
+        dtEx = mydt;
         min_dt2 = std::min(min_dt2, dtEx);
       } else {
         dtEx = 2.0*pmesh->dt;
@@ -1074,7 +1074,6 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
 
   if (x3Move) {
     mydt = 2.0*pmesh->dt;
-    //for (int k = kl; k<=ku+1; k++){
     for (int k = ks; k<=ke+1; k++){
       nextPosDelta = pmesh->GridDiffEq_(pmb->pcoord->x3f(k),k,pmesh->time,mydt,3,pmesh->GridData)*mydt;
 
@@ -1100,7 +1099,7 @@ Real Expansion::GridTimeStep(MeshBlock *pmb){
             count = 0.0;
           }
         }
-        dtEx = mydt;//*pmesh->cfl_number;//fabs(minCellSize* 0.5/nextPosDelta * (pmesh->dt));
+        dtEx = mydt;
         min_dt3 = std::min(min_dt3, dtEx);
       } else {
         dtEx = 2.0*pmesh->dt;

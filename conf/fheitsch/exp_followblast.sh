@@ -15,6 +15,7 @@ python3 configure.py\
                          --ng 4 \
                          --ns 1 \
                          -exp \
+                         -tsi \
                          -b \
                          -mpi 
                           

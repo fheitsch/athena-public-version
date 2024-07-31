@@ -117,7 +117,7 @@ class Parameters {
 
 //typedef Real (*CoolingFunc_t)(const Real dens, const Real temp); // For generic cooling functions
 
-int nx1, icool;
+int icool;
 Real x1rat, x2rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool, zmetwind, zmethalo;
 Real coolsafe = 0.05, lengthcool;
 AthenaArray<Real> k1, k2, k3, k4, yarr0, yarr1, ytemp_;
@@ -1001,9 +1001,22 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   x1rat      = pin->GetOrAddReal("mesh","x1rat",1.0);
   x2rat      = pin->GetOrAddReal("mesh","x2rat",1.0);
-  nx1        = pin->GetInteger("mesh","nx1");
-  if (x1rat < 0.0) 
+  if (x1rat < 0.0) {
     EnrollUserMeshGenerator(X1DIR,PowerGridX1);
+    // Check mesh
+    if (mesh_size.nx2 > 1) {
+      Real nx2exp = (PI*std::pow(mesh_size.x1max/mesh_size.x1min,0.5/mesh_size.nx1))
+                   /(std::pow(mesh_size.x1max/mesh_size.x1min,1.0/mesh_size.nx1)-1.0);
+      if (std::max((Real) mesh_size.nx2,nx2exp) > 2.0*std::min((Real) mesh_size.nx2,nx2exp)) {
+        std::stringstream msg;
+        msg << "### FATAL ERROR in galpause.cpp: Aspect ratio > 2: " 
+            << " nx2 =" << std::scientific << std::setw(10) << std::setprecision(2) << (Real) mesh_size.nx2
+            << " nx2exp =" << std::scientific << std::setw(10) << std::setprecision(2) << nx2exp
+            << std::endl;
+        throw std::runtime_error(msg.str().c_str());
+      }
+    }
+  }
   if (x2rat == -2.0) {
     EnrollUserMeshGenerator(X2DIR,QuadraticX2);
   } else if (x2rat == -1.0) {
@@ -1026,7 +1039,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   icool    = pin->GetOrAddReal("problem","icool",0);
   coolsafe = pin->GetOrAddReal("problem","coolsafe",0.05);
   zmetwind = pin->GetOrAddReal("problem","zmetwind",1.0);
-  zmethalo = pin->GetOrAddReal("problem","zmetwind",0.1);
+  zmethalo = pin->GetOrAddReal("problem","zmethalo",0.1);
   if (icool > 0) {
     EnrollUserExplicitSourceFunction(HeatCool);
     EnrollUserTimeStepFunction(HeatCoolTimeStep);
@@ -1284,7 +1297,6 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   Real gamma;
 
-
   icool     = pin->GetOrAddInteger("problem","icool",0); // 0: no cooling, 1: power-law cooling, 2: WSS09 cooling
   turbcool  = pin->GetOrAddReal("problem","turbcool",0.0); // add turbulent heating
   expboost  = pin->GetOrAddReal("problem","expboost",1.0); // 2.0 works ok for full angle. 
@@ -1301,8 +1313,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   // wind parameters
   fwind   = pin->GetOrAddReal("problem","fwind",0.1);
-  zmetwind= pin->GetOrAddReal("problem","zmetwind",0.1);
-  zmethalo= pin->GetOrAddReal("problem","zmethalo",1.0);
+  zmetwind= pin->GetOrAddReal("problem","zmetwind",1.0);
+  zmethalo= pin->GetOrAddReal("problem","zmethalo",0.1);
   gamma   = peos->GetGamma();
   gm1     = gamma - 1.0;
   csound2 = pparam->Temp();
@@ -1335,7 +1347,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
                                                              / phydro->u(IDN,k,j,i);
           if (DUAL_ENERGY) phydro->u(IIE,k,j,i) = den*pparam->Temp()/gm1;
         }
-        phydro->u(NHYDRO-NSCALARS  ,k,j,i) = zmetwind*den; // metallicity
+        phydro->u(NHYDRO-NSCALARS  ,k,j,i) = zmethalo*den; // metallicity
         phydro->u(NHYDRO-NSCALARS+1,k,j,i) = den; // ambient
         phydro->u(NHYDRO-NSCALARS+2,k,j,i) = 0.0; // wind
       }
@@ -1404,6 +1416,18 @@ void Mesh::UserWorkInLoop(void) {
 
   MeshBlock *pmb=pblock;
 
+  if (EXPANDING_ENABLED) {
+    if (Globals::my_rank==0) {
+      if (x1rat < 0.0) {
+        Real nx2exp = (PI*std::pow(mesh_size.x1max/mesh_size.x1min,0.5/mesh_size.nx1))
+                     /(std::pow(mesh_size.x1max/mesh_size.x1min,1.0/mesh_size.nx1)-1.0);
+        fprintf(stdout,"[UserWorkInLoop]: rmax = %13.5e nx2exp/nx2 = %13.5e\n",mesh_size.x1max,nx2exp/((Real) mesh_size.nx2));
+      } else {
+        fprintf(stdout,"[UserWorkInLoop]: rmax = %13.5e\n",mesh_size.x1max);
+      }
+    }
+  }
+
   const int nq = 11;
   Real qtot[nq]; // 0: vol, 1: dens, 2: vtot, 3: etot, 4: eint, 5: ekin, 6: emag, 7-9: v1-v3
   Real qmin[nq];
@@ -1423,7 +1447,7 @@ void Mesh::UserWorkInLoop(void) {
     lengrat[q] = (FLT_MAX);
   Real u[NHYDRO];
 
-  bool allfail = false;
+  bool allfail = false, fail = false;
 
   while (pmb != NULL) { // collect results from individual pmbs
     for (int k=pmb->ks; k<=pmb->ke; k++) {
@@ -1432,10 +1456,10 @@ void Mesh::UserWorkInLoop(void) {
         Real x2  = pmb->pcoord->x2v(j);
         Real xtest = pmb->pcoord->x1f(pmb->is);
         for (int i=pmb->is; i<=pmb->ie; i++) {
-          bool fail =    isnan(pmb->phydro->u(IEN,k,j,i)) 
-                      || isnan(pmb->phydro->u(IDN,k,j,i))
-                      || (pmb->phydro->u(IEN,k,j,i) <= 0.0)
-                      || (pmb->phydro->u(IDN,k,j,i) <= 0.0);
+          fail =    isnan(pmb->phydro->u(IEN,k,j,i)) 
+                 || isnan(pmb->phydro->u(IDN,k,j,i))
+                 || (pmb->phydro->u(IEN,k,j,i) <= 0.0)
+                 || (pmb->phydro->u(IDN,k,j,i) <= 0.0);
           if (DUAL_ENERGY) {
             fail = fail || isnan(pmb->phydro->u(IIE,k,j,i)) || (pmb->phydro->u(IIE,k,j,i) <= 0.0); 
           }
@@ -1512,6 +1536,7 @@ void Mesh::UserWorkInLoop(void) {
             lengrat[0] = std::min(lengrat[0],temp*std::sqrt(temp)/(dx1*fabs(pcoolfunc->HeatCoolFunc(u[IDN],temp,vt,zmet)))); // cooling length
           lengrat[1] = std::min(lengrat[1],std::sqrt(PI*temp/u[IDN])/dx1); // Jeans length
           //fprintf(stdout,"[UserWorkInLoop]: i=%2i d=%13.5e v=%13.5e e=%13.5e\n",i,u[IDN],u[IM1]/u[IDN],u[IEN]);
+          allfail = (fail || allfail);
         }
       }
     }
@@ -1525,6 +1550,7 @@ void Mesh::UserWorkInLoop(void) {
   ierr = MPI_Allreduce(MPI_IN_PLACE,&qmax,nq,MPI_ATHENA_REAL,MPI_MAX,MPI_COMM_WORLD);
   ierr = MPI_Allreduce(MPI_IN_PLACE,&trac,3 ,MPI_ATHENA_REAL,MPI_SUM,MPI_COMM_WORLD);
   ierr = MPI_Allreduce(MPI_IN_PLACE,&lengrat,2,MPI_ATHENA_REAL,MPI_MIN,MPI_COMM_WORLD);
+  ierr = MPI_Allreduce(MPI_IN_PLACE,&allfail,1,MPI_C_BOOL,MPI_LOR,MPI_COMM_WORLD);
 #endif
   for (int q=1; q<nq; q++) qtot[q] /= qtot[0];
   for (int q=1; q<3;  q++) trac[q] /= trac[0];
@@ -1591,7 +1617,7 @@ void Mesh::UserWorkInLoop(void) {
       stop_this();
     }
   }
-  if (dt < 1e-12) {
+  if (dt < 1e-20) {
     std::cout << "[UserWorkInLoop]: Timestep dropped below 1e-12. Failure." << std::endl;
     stop_this();
   }

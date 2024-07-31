@@ -1022,7 +1022,7 @@ void Mesh::OutputMeshStructure(int dim) {
 //----------------------------------------------------------------------------------------
 // \!fn void Mesh::NewTimeStep(void)
 // \brief function that loops over all MeshBlocks and find new timestep
-//        this assumes that phydro->NewBlockTimeStep is already called
+//        this assumes that phydro->NewBlockTimeStep has completed.
 
 void Mesh::NewTimeStep(void) {
   MeshBlock *pmb = pblock;
@@ -1071,11 +1071,11 @@ void Mesh::NewTimeStep(void) {
       buf_in[l*7+0] = all_min_dts(l);
 //#pragma omp simd
       for (int m=0; m<3; m++) {
-        buf_in[l*7+m]   = all_min_loc(l,m);
+        buf_in[l*7+1+m] = all_min_loc(l,m);
         buf_in[l*7+4+m] = ((Real) all_min_ind(l,m)) + 0.01;
       }
     }
-    ierr = MPI_Gather(buf_in,7*ndt,MPI_ATHENA_REAL,buf_out,7*ndt,MPI_DOUBLE,0,MPI_COMM_WORLD);
+    ierr = MPI_Gather(buf_in,7*ndt,MPI_ATHENA_REAL,buf_out,7*ndt,MPI_ATHENA_REAL,0,MPI_COMM_WORLD);
     ierr = MPI_Barrier(MPI_COMM_WORLD);
 
     if (Globals::my_rank == 0) { // from here on, just master 
@@ -1094,11 +1094,11 @@ void Mesh::NewTimeStep(void) {
             pmax = p;
           }
         }
+        all_min_prc(l) = pmax;
 //#pragma omp simd
         for (int m=0; m<3; m++) {
           all_min_loc(l,m) = buf_out[7*ndt*pmax+7*l+1+m];
           all_min_ind(l,m) = (int) buf_out[7*ndt*pmax+7*l+4+m];
-          all_min_prc(l)   = pmax; 
         }
       }
       mindt_proc.DeleteAthenaArray();
@@ -1171,13 +1171,13 @@ void Mesh::NewTimeStep(void) {
         }
         if (pblock->ks < pblock->ke) {
           std::cout << "[Mesh::NewTimeStep]: dta3 = " << std::setw(13) << std::scientific << std::setprecision(5) << all_min_dts(6)
-                    <<                    "  p    = " << std::setw(5) << all_min_prc(6)
-                    <<                    "  x1   = " << std::setw(13) << std::scientific << std::setprecision(5) << all_min_loc(6,0)
-                    <<                    "  x2   = " << std::setw(13) << std::scientific << std::setprecision(5) << all_min_loc(6,1)
-                    <<                    "  x3   = " << std::setw(13) << std::scientific << std::setprecision(5) << all_min_loc(6,2)
-                    <<                    "  i    = " << std::setw(5) << all_min_ind(6,0)
-                    <<                    "  j    = " << std::setw(5) << all_min_ind(6,1)
-                    <<                    "  k    = " << std::setw(5) << all_min_ind(6,2)
+                    <<                    "  p = " << std::setw(5) << all_min_prc(6)
+                    <<                    "  x1 = " << std::setw(13) << std::scientific << std::setprecision(5) << all_min_loc(6,0)
+                    <<                    "  x2 = " << std::setw(13) << std::scientific << std::setprecision(5) << all_min_loc(6,1)
+                    <<                    "  x3 = " << std::setw(13) << std::scientific << std::setprecision(5) << all_min_loc(6,2)
+                    <<                    "  i = " << std::setw(5) << all_min_ind(6,0)
+                    <<                    "  j = " << std::setw(5) << all_min_ind(6,1)
+                    <<                    "  k = " << std::setw(5) << all_min_ind(6,2)
                     << std::endl;
         }
       }
@@ -1241,6 +1241,19 @@ void Mesh::NewTimeStep(void) {
     all_min_loc.DeleteAthenaArray();   
     all_min_ind.DeleteAthenaArray();   
     all_min_prc.DeleteAthenaArray();
+
+    // still need the overall timestep...
+    pmb = pblock;
+    min_dt=pmb->new_block_dt;
+    pmb=pmb->next;
+    while (pmb != NULL)  {
+      min_dt=std::min(min_dt,pmb->new_block_dt);
+      pmb=pmb->next;
+    }
+    pmb = pblock;
+#ifdef MPI_PARALLEL
+    MPI_Allreduce(MPI_IN_PLACE,&min_dt,1,MPI_ATHENA_REAL,MPI_MIN,MPI_COMM_WORLD);
+#endif
   } else { // old branch 
     min_dt=pmb->new_block_dt;
     pmb=pmb->next;
