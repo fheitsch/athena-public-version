@@ -2733,6 +2733,7 @@ bool Mesh::CheckAndReset(Mesh *pm) {
       failed = (failed || (pmb->prec->Check(pmb)));
       pmb = pmb->next;
     }
+    pmb = pm->pblock;
     //if (failed) {
     //  std::cout << "[Mesh::CheckAndReset]: failed before Allreduce in proc " 
     //            << std::setw(5) << Globals::my_rank << std::endl;
@@ -2743,12 +2744,11 @@ bool Mesh::CheckAndReset(Mesh *pm) {
 #ifdef MPI_PARALLEL
     MPI_Allreduce(MPI_IN_PLACE,&failed,1,MPI_C_BOOL,MPI_LOR,MPI_COMM_WORLD);
 #endif
-    pmb = pm->pblock;
     if (Globals::my_rank==0) {
       if (failed) {
-        std::cout << "[Mesh:CheckAndReset]: failed after Allreduce" << std::endl;
+        std::cout << "[Mesh::CheckAndReset]: integration failed" << std::endl;
       } else {
-        std::cout << "[Mesh:CheckAndReset]: all ok after Allreduce" << std::endl; 
+        std::cout << "[Mesh::CheckAndReset]: integration succeeded" << std::endl; 
       }
     }
 
@@ -2772,6 +2772,7 @@ bool Mesh::CheckAndReset(Mesh *pm) {
           bounds[5] = std::min(-pmb->block_size.x3max,bounds[5]);
           pmb = pmb->next;
         }
+        pmb = pm->pblock;
 #ifdef MPI_PARALLEL
         MPI_Allreduce(MPI_IN_PLACE,&bounds,6,MPI_ATHENA_REAL,MPI_MIN,
                       MPI_COMM_WORLD);
@@ -2782,7 +2783,6 @@ bool Mesh::CheckAndReset(Mesh *pm) {
         pm->mesh_size.x1max = -bounds[3];
         pm->mesh_size.x2max = -bounds[4];
         pm->mesh_size.x3max = -bounds[5];
-        pmb = pm->pblock;
       }
     }
   }

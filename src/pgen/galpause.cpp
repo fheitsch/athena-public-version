@@ -640,7 +640,7 @@ class CoolingFunction {
                  + xion_s   (itemp1,idens1)*w4;
       lambda = lambda_0 + lambda_z* (xe_0/xe_s)*zmet;
       // Cooling is positive in WSS09, and turbulent heating rate in code units
-      // vtot should contain soundspeed to prevent zeroing of temperature for quiescent flow.
+      // vtot should contain sound speed to prevent zeroing of temperature for quiescent flow.
       dedt   = -dd*lambda*fac + turbcool*dd*SQR(vtot)*vtot/lengthcool; 
       return dedt;
     };

@@ -75,9 +75,9 @@ void EquationOfState::ConservedToPrimitive(AthenaArray<Real> &cons,
       Real& w_p  = prim(IPR,k,j,i); // pressure, from total energy
       Real& w_ge = prim(IGE,k,j,i); // pressure, pdV track
 				
-      if (!RECOVER_ENABLED) {
+      //if (!RECOVER_ENABLED) {
         u_d = (u_d > density_floor_) ?  u_d : density_floor_;
-      }
+      //}
       w_d = u_d;
 
       Real di = 1.0/u_d;
@@ -196,10 +196,10 @@ Real EquationOfState::SoundSpeed(const Real prim[NHYDRO]) {
 void EquationOfState::ApplyPrimitiveFloors(AthenaArray<Real> &prim, int k, int j, int i) {
   Real& w_d  = prim(IDN,k,j,i);
 
-  if (!RECOVER_ENABLED) {
+  //if (!RECOVER_ENABLED) {
     // apply density floor
     w_d = (w_d > density_floor_) ?  w_d : density_floor_;
-  }
+  //}
 
   return;
 }

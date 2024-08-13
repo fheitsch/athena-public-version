@@ -66,10 +66,7 @@ void EquationOfState::ConservedToPrimitive(AthenaArray<Real> &cons,
       Real& w_vz = prim(IVZ,k,j,i);
       Real& w_p  = prim(IPR,k,j,i);
 
-      if (!RECOVER_ENABLED) {
-        // apply density floor, without changing momentum or energy
-        u_d = (u_d > density_floor_) ?  u_d : density_floor_;
-      }
+      u_d = (u_d > density_floor_) ?  u_d : density_floor_;
       w_d = u_d;
 
       Real di = 1.0/u_d;
@@ -85,11 +82,8 @@ void EquationOfState::ConservedToPrimitive(AthenaArray<Real> &cons,
       Real ke = 0.5*di*(SQR(u_m1) + SQR(u_m2) + SQR(u_m3));
       w_p = gm1*(u_e - ke - pb);
 
-      if (!RECOVER_ENABLED) {
-        // apply pressure floor, correct total energy
-        u_e = (w_p > pressure_floor_) ?  u_e : ((pressure_floor_/gm1) + ke + pb);
-        w_p = (w_p > pressure_floor_) ?  w_p : pressure_floor_;
-      }
+      u_e = (w_p > pressure_floor_) ?  u_e : ((pressure_floor_/gm1) + ke + pb);
+      w_p = (w_p > pressure_floor_) ?  w_p : pressure_floor_;
     }
   }}
 
@@ -143,7 +137,7 @@ void EquationOfState::PrimitiveToConserved(const AthenaArray<Real> &prim,
 //----------------------------------------------------------------------------------------
 // \!fn Real EquationOfState::SoundSpeed(Real prim[NHYDRO])
 // \brief returns adiabatic sound speed given vector of primitive variables
-Real EquationOfState::SoundSpeed(const Real prim[NHYDRO]) {
+Real EquationOfState::SoundSpeed(const Real prim[NHYDRO+2]) {
   return std::sqrt(GetGamma()*prim[IPR]/prim[IDN]);
 }
 
@@ -168,12 +162,8 @@ void EquationOfState::ApplyPrimitiveFloors(AthenaArray<Real> &prim, int k, int j
   Real& w_d  = prim(IDN,k,j,i);
   Real& w_p  = prim(IPR,k,j,i);
 
-  if (!RECOVER_ENABLED) {
-    // apply density floor
-    w_d = (w_d > density_floor_) ?  w_d : density_floor_;
-    // apply pressure floor
-    w_p = (w_p > pressure_floor_) ?  w_p : pressure_floor_;
-  }
+  w_d = (w_d > density_floor_) ?  w_d : density_floor_;
+  w_p = (w_p > pressure_floor_) ?  w_p : pressure_floor_;
 
   return;
 }

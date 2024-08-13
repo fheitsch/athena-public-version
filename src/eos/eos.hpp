@@ -48,13 +48,18 @@ public:
 
   // Sound speed functions in different regimes
   #if !RELATIVISTIC_DYNAMICS  // Newtonian: SR, GR defined as no-op
-#pragma omp declare simd simdlen(SIMD_WIDTH) uniform(this)
-    Real SoundSpeed(const Real prim[(NHYDRO)]);
+//#pragma omp declare simd simdlen(SIMD_WIDTH) uniform(this)
+    //Real SoundSpeed(const Real prim[(NHYDRO)]);
     #if !MAGNETIC_FIELDS_ENABLED  // hydro: MHD defined as no-op
+#pragma omp declare simd simdlen(SIMD_WIDTH) uniform(this)
+      Real SoundSpeed(const Real prim[(NHYDRO)]);
       Real FastMagnetosonicSpeed(const Real[], const Real) {return 0.0;}
     #else  // MHD
+      // See note in hydro/rsolvers/mhd/hlld.cpp about change from NWAVE to NHYDRO+2. fh240805
 #pragma omp declare simd simdlen(SIMD_WIDTH) uniform(this)
-      Real FastMagnetosonicSpeed(const Real prim[(NWAVE)], const Real bx);
+      Real SoundSpeed(const Real prim[(NHYDRO+2)]);
+#pragma omp declare simd simdlen(SIMD_WIDTH) uniform(this)
+      Real FastMagnetosonicSpeed(const Real prim[(NHYDRO+2)], const Real bx);
     #endif  // !MAGNETIC_FIELDS_ENABLED
 
     void SoundSpeedsSR(Real, Real, Real, Real, Real *, Real *) {return;}

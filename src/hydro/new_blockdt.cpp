@@ -129,8 +129,9 @@ Real Hydro::NewBlockTimeStep(void) {
 
             if (TIMESTEPINFO_ENABLED) { // extra work so we can distinguish between hydro and MHD
               Real cs = pmb->peos->SoundSpeed(wi);
-              if (dt1(i)/cs < pmb->all_min_dts(0)) { // sound speed
-                pmb->all_min_dts(0)   = dt1(i)/cs;
+              Real dtcsmin = std::min(std::min(dt1(i),dt2(i)),dt3(i));
+              if (dtcsmin/cs < pmb->all_min_dts(0)) { // sound speed. 
+                pmb->all_min_dts(0)   = dtcsmin/cs;
                 pmb->all_min_loc(0,0) = pmb->pcoord->x1v(i);
                 pmb->all_min_loc(0,1) = pmb->pcoord->x2v(j);
                 pmb->all_min_loc(0,2) = pmb->pcoord->x3v(k);
@@ -206,7 +207,7 @@ Real Hydro::NewBlockTimeStep(void) {
             bx = bcc(IB3,k,j,i) + fabs(b_x3f(k,j,i)-bcc(IB3,k,j,i));
             cf = pmb->peos->FastMagnetosonicSpeed(wi,bx);
             if (TIMESTEPINFO_ENABLED) {
-              if (dt3(i)/cf < pmb->all_min_dts(6)) { // a1-velocity
+              if (dt3(i)/cf < pmb->all_min_dts(6)) { // a3-velocity
                 pmb->all_min_dts(6)   = dt3(i)/cf;
                 pmb->all_min_loc(6,0) = pmb->pcoord->x1v(i);
                 pmb->all_min_loc(6,1) = pmb->pcoord->x2v(j);

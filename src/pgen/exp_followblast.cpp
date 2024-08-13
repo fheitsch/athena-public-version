@@ -33,6 +33,9 @@
 #include <mpi.h>
 #endif
 
+// trying to find the issue with random crashes
+//#define SIMPLETRACK
+
 #if (NSCALARS != 1)
 #error: Requires NSCALARS = 1
 #endif
@@ -184,6 +187,7 @@ Real WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> grid
 //    iweight    == -4: magnetic pressure gradient
 //    iweight    == -5: vrad gradient
 //  
+//    ivexp      == -1: expansion velocity set to time-dependent function
 //    ivexp      ==  0: expansion velocity set to constant vtrack0
 //    ivexp      ==  1: expansion velocity via radial velocity
 //    ivexp      ==  2: expansion velocity via radius: calculate velocity via finite differences
@@ -213,7 +217,12 @@ void UpdateGridData(Mesh *pm) {
     pm->GridData(3) = pm->mesh_size.x1max;
   }
 
-  if (ivexp == 0) { // constant velocity 
+#ifdef SIMPLETRACK
+  vtrack = 0.25*std::pow(pm->time+1.1e-4,-0.75);
+#else
+  if (ivexp == -1) { // imposed profile
+    vtrack = 0.25*std::pow(pm->time+1.1e-4,-0.75); // see plotvtrack.py - need to adapt for different models
+  } else if (ivexp == 0) { // constant velocity 
     vtrack = vtrack0;
   } else { // if (ivexp == 0)
     AthenaArray<Real> weight, quant, radius;
@@ -234,7 +243,7 @@ void UpdateGridData(Mesh *pm) {
           Real z = pmb->pcoord->x3v(k);
           for (int j=js; j<=je; ++j) {
             Real y = pmb->pcoord->x2v(j);
-#pragma omp simd
+//#pragma omp simd
             for (int i=is; i<=ie; ++i) {
               Real x    = pmb->pcoord->x1v(i);
               Real vrad, rad;
@@ -257,7 +266,7 @@ void UpdateGridData(Mesh *pm) {
           Real z = pmb->pcoord->x3v(k);
           for (int j=js; j<=je; ++j) {
             Real y = pmb->pcoord->x2v(j);
-#pragma omp simd
+//#pragma omp simd
             for (int i=is; i<=ie; ++i) {
               Real x    = pmb->pcoord->x1v(i);
               Real rad;
@@ -372,7 +381,7 @@ void UpdateGridData(Mesh *pm) {
               Real y = pmb->pcoord->x2v(j);
               Real ym= pmb->pcoord->x2v(j-1);
               Real yp= pmb->pcoord->x2v(j+1);
-#pragma omp simd
+//#pragma omp simd
               for (int i=is+1; i<=ie-1; ++i) {
                 Real x      = pmb->pcoord->x1v(i);
                 Real xm     = pmb->pcoord->x1v(i-1);
@@ -492,7 +501,12 @@ void UpdateGridData(Mesh *pm) {
     //  fprintf(stdout,"[UpdateGrid] vtrack=%13.5e rtrack=%13.5e xmax =%13.5e\n", vtrack,totquant,pm->GridData(3));
   } // if (ivexp == 0)
 
+#endif // SIMPLETRACK
+
   vtrack *= boost;
+
+  //if (Globals::my_rank == 0)
+  //  fprintf(stdout,"[UpdateGrid]: time=%13.5e vtrack=%13.5e xmax =%13.5e\n",pm->time,vtrack,pm->GridData(3));
 
   pm->GridData(2) = vtrack;
   if (COORDINATE_SYSTEM=="cartesian") {
@@ -1119,9 +1133,6 @@ void InnerX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
           b.x1f(k,j,is-i) =   std::sin(theta)*std::cos(phi)*bx0
                             + std::sin(theta)*std::sin(phi)*by0
                             + std::cos(theta)*bz0;
-          //b.x1f(k,j,is-i) = b0 * std::abs(std::sin(theta))
-          //                     * (   std::cos(angle) * std::cos(phi) 
-          //                         + std::sin(angle) * std::sin(phi));
         }
       }
     }
@@ -1134,11 +1145,6 @@ void InnerX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
           b.x2f(k,j,is-i) =    std::cos(theta)*std::cos(phi)*bx0
                              + std::cos(theta)*std::sin(phi)*by0
                              - std::sin(theta)*bz0;
-          //b.x2f(k,j,is-i) = b0 * std::cos(theta)
-          //                     * (   std::cos(angle) * std::cos(phi)
-          //                         + std::sin(angle) * std::sin(phi));
-          //if (std::sin(theta) < 0.0)
-          //  b.x2f(k,j,is-i) *= -1.0;
         }
       }
     }
@@ -1149,8 +1155,6 @@ void InnerX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
         for (int i=1; i<=ngh; ++i) {
           b.x3f(k,j,is-i) = - std::sin(phi)*bx0
                             + std::cos(phi)*by0;
-          //b.x3f(k,j,is-i) = b0 * (   std::sin(angle) * std::cos(phi)
-          //                         - std::cos(angle) * std::sin(phi));
         }
       }
     }
@@ -1166,8 +1170,6 @@ void InnerX1_Spherical(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim
 //========================================================================================
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
-  // In practice, this function should *always* be replaced by a version
-  // that sets the initial conditions for the problem of interest.
   int iprob = pin->GetInteger("problem","iprob"); // -1: field loop; 0: uniform; > 0: blast
   Real rout = pin->GetReal("problem","radius");
   Real dr   = pin->GetReal("problem","ramp");
@@ -1192,7 +1194,10 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   Real gamma = peos->GetGamma();
   Real gm1 = gamma - 1.0;
 
-  //fprintf(stdout,"IDN=%2i IVX=%2i IVY=%2i IVZ=%2i IPR=%2i IBY=%2i IBZ=%2i NHYDRO-SCALARS=%2i NHYDRO=%2i NWAVE=%2i\n",IDN,IVX,IVY,IVZ,IPR,IBY,IBZ,NHYDRO-NSCALARS,NHYDRO,NWAVE);
+  if (Globals::my_rank==0) {
+    fprintf(stdout,"IDN=%2i IVX=%2i IVY=%2i IVZ=%2i IPR=%2i IBY=%2i IBZ=%2i NHYDRO-SCALARS=%2i NHYDRO=%2i NWAVE=%2i NWAVE+NINT+NSCAL=%2i\n",
+            IDN,IVX,IVY,IVZ,IPR,IBY,IBZ,NHYDRO-NSCALARS,NHYDRO,NWAVE,NWAVE+NINT+NSCALARS);
+  }
 
   // get coordinates of center of blast, and convert to Cartesian if necessary
   Real x1_0   = pin->GetOrAddReal("problem","x1_0",0.0);
@@ -1451,11 +1456,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             phydro->u(IIE,k,j,i) = pres/gm1;
           }
         }
- 
-        for (int n=NHYDRO-NSCALARS; n<NHYDRO; ++n) {
-          phydro->u(n,k,j,i) = den*0.25*(1.0+std::tanh((rad-1.0*rout)/(0.01*rout)))
-                                       *(1.0-std::tanh((rad-1.2*rout)/(0.01*rout)));
-        }
+        phydro->u(NHYDRO-NSCALARS,k,j,i) = den*0.25*(1.0+std::tanh((rad-1.0*rout)/(0.01*rout)))
+                                                   *(1.0-std::tanh((rad-1.2*rout)/(0.01*rout)));
       }
     }
   }
@@ -1471,17 +1473,10 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             pfield->b.x1f(k,j,i) =
                 b0 * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            //new
             Real theta = pcoord->x2v(j);
             Real phi = pcoord->x3v(k);
             pfield->b.x1f(k,j,i) =   std::sin(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
                                    + std::cos(theta)*bz0; 
-            //original
-            //Real theta = pcoord->x2v(j);
-            //Real phi = pcoord->x3v(k);
-            //pfield->b.x1f(k,j,i) = b0 * std::abs(std::sin(theta))
-            //    * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi))
-            //    + std::cos(theta)*bz0;
           }
         }
       }
@@ -1496,19 +1491,10 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             pfield->b.x2f(k,j,i) =
                 b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            //new
-            Real theta = pcoord->x2f(j);
-            Real phi   = pcoord->x3v(k);
+            Real theta = pcoord->x2f(j); // needs to be located on wall for b.x2f
+            Real phi   = pcoord->x3v(k); // here we need center position
             pfield->b.x2f(k,j,i) =   std::cos(theta)*(std::cos(phi)*bx0+std::sin(phi)*by0)
                                    - std::sin(theta)*bz0;
-            //original
-            //Real theta = pcoord->x2v(j);
-            //Real phi = pcoord->x3v(k);
-            //pfield->b.x2f(k,j,i) = b0 * std::cos(theta)
-            //    * (std::cos(angle) * std::cos(phi) + std::sin(angle) * std::sin(phi));
-            //if (std::sin(theta) < 0.0)
-            //  pfield->b.x2f(k,j,i) *= -1.0;
-
           }
         }
       }
@@ -1519,14 +1505,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           if (COORDINATE_SYSTEM == "cartesian" || COORDINATE_SYSTEM == "cylindrical") {
             pfield->b.x3f(k,j,i) = bz0;
           } else { //if (COORDINATE_SYSTEM == "spherical_polar") {
-            //new
-            Real phi = pcoord->x3f(k);
+            Real phi = pcoord->x3f(k); // Needs to be located on wall for b.x3f.
             pfield->b.x3f(k,j,i) = - std::sin(phi)*bx0
                                    + std::cos(phi)*by0;
-            //original
-            //Real phi = pcoord->x3v(k);
-            //pfield->b.x3f(k,j,i) =
-            //    b0 * (std::sin(angle) * std::cos(phi) - std::cos(angle) * std::sin(phi));
           }
         }
       }
@@ -1559,6 +1540,7 @@ void Mesh::UserWorkInLoop(void) {
   }
 
   bool fail = false, allfail = false;
+  int ifail = 0;
 
   MeshBlock *pmb=pblock;
 
@@ -1587,24 +1569,27 @@ void Mesh::UserWorkInLoop(void) {
             fail = fail || isnan(pmb->phydro->u(IIE,k,j,i)) || (pmb->phydro->u(IIE,k,j,i) <= 0.0);
           }
           if (fail) {
-            if (DUAL_ENERGY) {
-              std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
-                        << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
-                        << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
-                        << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
-                        << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
-                        << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
-                        << " ei=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IIE,k,j,i)
-                        << std::endl;
-            } else {
-              std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
-                        << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
-                        << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
-                        << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
-                        << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
-                        << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
-                        << std::endl;
-            }
+            ifail++;
+            //if (DUAL_ENERGY) {
+            //  std::cout << "[UserWorkInLoop]: Warning: p=" << std::setw(3) << Globals:my_rank 
+            //            << " i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
+            //            << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
+            //            << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
+            //            << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
+            //            << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
+            //            << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
+            //            << " ei=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IIE,k,j,i)
+            //            << std::endl;
+            //} else {
+            //  std::cout << "[UserWorkInLoop]: Warning: p=" << std::setw(3) << Globals:my_rank 
+            //            << " i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
+            //            << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
+            //            << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
+            //            << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
+            //            << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
+            //            << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
+            //            << std::endl;
+            //}
           }
           allfail = (fail || allfail);
         }
@@ -1613,11 +1598,18 @@ void Mesh::UserWorkInLoop(void) {
     pmb = pmb->next;
   } 
 
+  if (allfail) {
+    std::cout << "[UserWorkInLoop]: p=" << std::setw(4) << Globals::my_rank << ": failure in " << std::setw(9) << ifail << " cells." << std::endl;
+  }
+
 #ifdef MPI_PARALLEL
   int ierr = MPI_Allreduce(MPI_IN_PLACE,&allfail,1,MPI_C_BOOL,MPI_LOR,MPI_COMM_WORLD);
+  ierr = MPI_Allreduce(MPI_IN_PLACE,&ifail,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
 #endif
   if (allfail) {
-    std::cout << "[UserWorkInLoop]: failure" << std::endl;
+    if (Globals::my_rank == 0) {
+      std::cout << "[UserWorkInLoop]: failure in " << std::setw(9) << ifail << " cells." << std::endl;
+    }
     stop_this();
   }
 

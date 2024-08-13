@@ -389,7 +389,7 @@ int main(int argc, char *argv[]) {
 
       bool failed = true;
       int itretry = 0; 
-      while ((failed) && (itretry <= pmesh->maxitretry)) {
+      while ((failed) && (itretry < pmesh->maxitretry)) {
 
         if (pmesh->turb_flag > 1) pmesh->ptrbd->Driving(); // driven turbulence
 

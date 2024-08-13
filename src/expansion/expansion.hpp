@@ -62,7 +62,7 @@ public:
 private:
   MeshBlock* pmy_block;    // ptr to MeshBlock containing this Expansion
   // Scratch arrays
-  AthenaArray<Real> face_area_old_, face_area_new_;
+  AthenaArray<Real> face_area_old_;
 
 
 

@@ -63,10 +63,10 @@ void EquationOfState::ConservedToPrimitive(AthenaArray<Real> &cons,
       Real& w_vz = prim(IVZ,k,j,i);
       Real& w_p  = prim(IPR,k,j,i);
 
-      if (!RECOVER_ENABLED) {
+      //if (!RECOVER_ENABLED) {
         // apply density floor, without changing momentum or energy
         u_d = (u_d > density_floor_) ?  u_d : density_floor_;
-      }
+      //}
       w_d = u_d;
 
       Real di = 1.0/u_d;
@@ -77,10 +77,10 @@ void EquationOfState::ConservedToPrimitive(AthenaArray<Real> &cons,
       Real ke = 0.5*di*(SQR(u_m1) + SQR(u_m2) + SQR(u_m3));
       w_p = gm1*(u_e - ke);
  
-      if (!RECOVER_ENABLED) {
+      //if (!RECOVER_ENABLED) {
         u_e = (w_p > pressure_floor_) ?  u_e : ((pressure_floor_/gm1) + ke);
         w_p = (w_p > pressure_floor_) ?  w_p : pressure_floor_;
-      }
+      //}
     }
   }}
 
@@ -178,12 +178,12 @@ void EquationOfState::ApplyPrimitiveFloors(AthenaArray<Real> &prim, int k, int j
   Real& w_d  = prim(IDN,k,j,i);
   Real& w_p  = prim(IPR,k,j,i);
 
-  if (!RECOVER_ENABLED) {
+  //if (!RECOVER_ENABLED) {
     // apply density floor
     w_d = (w_d > density_floor_) ?  w_d : density_floor_;
     // apply pressure floor
     w_p = (w_p > pressure_floor_) ?  w_p : pressure_floor_;
-  }
+  //}
 
   return;
 }

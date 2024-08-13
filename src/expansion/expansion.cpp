@@ -109,8 +109,7 @@ Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin) {
 
   // scratch arrays for rescaling
   if (MAGNETIC_FIELDS_ENABLED) {
-    face_area_old_.NewAthenaArray(ncells1);
-    face_area_new_.NewAthenaArray(ncells1);
+    face_area_old_.NewAthenaArray(ncells1+1);
   }
 
 #pragma omp simd
@@ -165,7 +164,6 @@ Expansion::~Expansion() {
 
   if (MAGNETIC_FIELDS_ENABLED) {
     face_area_old_.DeleteAthenaArray();
-    face_area_new_.DeleteAthenaArray();
   }
 
   if (x1Move) expFlux[X1DIR].DeleteAthenaArray();
@@ -333,14 +331,12 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
   MeshBlock *pmb=pmy_block;
   Mesh *pmesh = pmb->pmy_mesh;
 
-  Real areanew=0.0;
   AthenaArray<Real> areaold;
   areaold.InitWithShallowCopy(face_area_old_);
 
   AthenaArray<Real> &v1f = vf[X1DIR];
   AthenaArray<Real> &v2f = vf[X2DIR];
   AthenaArray<Real> &v3f = vf[X3DIR];
-  AthenaArray<Real> &v1v = vv[X1DIR];
 
   if (COORDINATE_SYSTEM == "cartesian") {
     for (int k=ks; k<=ke; ++k) { // B1
@@ -350,7 +346,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         Real darea3 = pmb->pcoord->dx2f(j)*(v3f(k+1)-v3f(k))*dt;   
 #pragma omp simd
         for (int i=is; i<=ie+1; ++i) {
-          areanew           = areaold(i) + darea2 + darea3;
+          Real areanew = areaold(i) + darea2 + darea3;
           b_out.x1f(k,j,i) *= areaold(i)/areanew;
         }
       } 
@@ -360,9 +356,9 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         pmb->pcoord->Face2Area(k,j,is,ie,areaold);  // old area at position i ("lower")
 #pragma omp simd 
         for (int i=is; i<=ie; ++i) {
-          Real darea1 = pmb->pcoord->dx3f(k)*(v1f(i+1)-v1f(i))*dt;
-          Real darea3 = pmb->pcoord->dx1f(i)*(v3f(k+1)-v3f(k))*dt;
-          areanew           = areaold(i) + darea1 + darea3;
+          Real darea1  = pmb->pcoord->dx3f(k)*(v1f(i+1)-v1f(i))*dt;
+          Real darea3  = pmb->pcoord->dx1f(i)*(v3f(k+1)-v3f(k))*dt;
+          Real areanew = areaold(i) + darea1 + darea3;
           b_out.x2f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -372,9 +368,9 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         pmb->pcoord->Face3Area(k,j,is,ie,areaold);  // old area at position i ("lower")
 #pragma omp simd 
         for (int i=is; i<=ie; ++i) {
-          Real darea1 = pmb->pcoord->dx2f(j)*(v1f(i+1)-v1f(i))*dt;
-          Real darea2 = pmb->pcoord->dx1f(i)*(v2f(j+1)-v2f(j))*dt;
-          areanew           = areaold(i) + darea1 + darea2;
+          Real darea1  = pmb->pcoord->dx2f(j)*(v1f(i+1)-v1f(i))*dt;
+          Real darea2  = pmb->pcoord->dx1f(i)*(v2f(j+1)-v2f(j))*dt;
+          Real areanew = areaold(i) + darea1 + darea2;
           b_out.x3f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -390,7 +386,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
           Real darea1       = v1f(i)*dt * dx2 * dx3;
           Real darea2       = pmb->pcoord->x1f(i) * (v2f(j+1)-v2f(j))*dt * dx3;
           Real darea3       = pmb->pcoord->x1f(i) * dx2 * (v3f(k+1)-v3f(k))*dt;
-          areanew           = areaold(i) + darea1 + darea2 + darea3;
+          Real areanew      = areaold(i) + darea1 + darea2 + darea3;
           b_out.x1f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -402,7 +398,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
         for (int i=is; i<=ie; ++i) {
           Real darea1       = (v1f(i+1)-v1f(i))*dt * pmb->pcoord->dx3f(k);
           Real darea3       = pmb->pcoord->dx1f(i) * (v3f(k+1)-v3f(k))*dt;
-          areanew           = areaold(i) + darea1 + darea3;
+          Real areanew      = areaold(i) + darea1 + darea3;
           b_out.x2f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -416,7 +412,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
           Real darea1       =   (pmb->pcoord->x1f(i+1)*v1f(i+1)-pmb->pcoord->x1f(i)*v1f(i))*dt
                               * pmb->pcoord->dx2f(k);
           Real darea2       = pmb->pcoord->coord_area3_i_(i) * (v2f(i+1)-v2f(i))*dt;
-          areanew           = areaold(i) + darea1 + darea2;
+          Real areanew      = areaold(i) + darea1 + darea2;
           b_out.x3f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -434,7 +430,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
 #pragma omp simd
         for (int i=is; i<=ie+1; ++i) {
           Real darea1       = 2.0*pmb->pcoord->x1f(i)*v1f(i)*dt * dx2 * dx3; 
-          areanew           = areaold(i) + darea1;
+          Real areanew      = areaold(i) + darea1;
           b_out.x1f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -449,7 +445,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
 #pragma omp simd 
         for (int i=is; i<=ie; ++i) {
           Real darea1       = (pmb->pcoord->x1f(i+1)*v1f(i+1)-pmb->pcoord->x1f(i)*v1f(i))*dt * dx2 * dx3;
-          areanew           = areaold(i) + darea1; 
+          Real areanew      = areaold(i) + darea1; 
           b_out.x2f(k,j,i) *= areaold(i)/areanew;
         }
       }
@@ -463,7 +459,7 @@ void Expansion::RescaleField(const Real dt, FaceField &b_out) {
 #pragma omp simd 
         for (int i=is; i<=ie; ++i) {
           Real darea1       =   (pmb->pcoord->x1f(i+1)*v1f(i+1)-pmb->pcoord->x1f(i)*v1f(i))*dt * dx2;
-          areanew           = areaold(i) + darea1;
+          Real areanew      = areaold(i) + darea1;
           b_out.x3f(k,j,i) *= areaold(i)/areanew;
         }
       }
