@@ -29,6 +29,7 @@
 #include "../field/field.hpp"
 #include "../globals.hpp"
 #include "../hydro/hydro.hpp"
+#include "../hydro/hydro_diffusion/hydro_diffusion.hpp"
 #include <hdf5.h>  // H5[F|P|S|T]_*, H5[A|D|F|P|S|T]*(), hid_t
 #ifdef MPI_PARALLEL
 #include <mpi.h>
@@ -50,6 +51,15 @@ ProfileFunc_t ProfileFunc;
 
 Real BetaProfile(const Real r); 
 Real ConstProfile(const Real r);
+
+void SpitzerConduction(HydroDiffusion *phdif, MeshBlock *pmb, const AthenaArray<Real> &prim,
+     const AthenaArray<Real> &bcc, int is, int ie, int js, int je, int ks, int ke);
+
+Real vtrack0 = 0.0;
+int itrack = 0;
+int maxntrack = 20;
+int ncycold=-1;
+AthenaArray<Real> ttrack,rtrack; // for tracking
 
 //typedef Real (*TimeStepFunc_t)(MeshBlock *pmb);
 
@@ -119,7 +129,7 @@ class Parameters {
 
 int icool;
 Real x1rat, x2rat, gam,gm1, fwind,acosfwind, csound2,rmin,vexp, turbcool, zmetwind, zmethalo;
-Real coolsafe = 0.05, lengthcool;
+Real tolcool, coolsafe = 0.05, lengthcool;
 AthenaArray<Real> k1, k2, k3, k4, yarr0, yarr1, ytemp_;
 // scratch arrays for cooling
 //AthenaArray<Real> dens, temp0, temp1, temp2, zmet, dener, dtcool, edot, vtot;
@@ -145,7 +155,7 @@ Real WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> grid
 void UpdateGridData(Mesh *pm);
 
 //Global Variables for OuterX1
-Real bx0,by0,bz0,expboost;
+Real bx0,by0,bz0,boost;
 
 void OuterX1_HydroStat(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
      FaceField &b, Real time, Real dt, int is, int ie, int js, int je, int ks, int ke, int ngh);
@@ -180,6 +190,7 @@ Real BetaPotential(const Real x1, const Real x2, const Real x3, const Real time)
   return phi;
 }
 
+// BetaProfile, page 15, 8/10/22
 Real BetaProfile(const Real r) {
   return pparam->Dens0()*pow(1.0+SQR(r/pparam->Rbeta()),-1.5*pparam->Beta());
 }
@@ -587,6 +598,7 @@ class CoolingFunction {
       }
     };
 
+    // HeatCoolFunc is cooling-function-specific and needs to be adapted.
     Real HeatCoolFunc(const Real dens, const Real temp, const Real vtot, const Real zmet) {
       int idens,itemp,idens1,itemp1;
       Real dedt,wd,wt,owd,owt,w1,w2,w3,w4,lambda,lambda_0,lambda_z,xe_0,xe_s;
@@ -672,12 +684,12 @@ class CoolingFunction {
     //========================================================================================
     // Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real dt)
     // \brief Finds root for RootFunc via bisection. Version without if-statements.
+    //        Assumes that the root has been bracketed between temp0 and temp1.
     //========================================================================================
     Real FindRoot(const Real dens, const Real temp0, const Real temp1, const Real vtot, const Real zmet, const Real dt) {
       if (HeatCoolFunc(dens,temp0,vtot,zmet) == 0.0) return temp0; // Nothing to do for thermal equilibrium
       // Otherwise, temp1 and temp0 bracket the temperature down to which we should integrate.
-      const Real tol = 1e-6;
-      int nit = (int) (log(fabs((temp1-temp0)/(temp1+temp0))/tol)/log(2.0));
+      int nit = (int) (log(fabs((temp1-temp0)/(temp1+temp0))/tolcool)/log(2.0));
       Real T[3], L[2];
       T[0]         = temp0;
       T[1]         = temp1;
@@ -706,47 +718,47 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
               const AthenaArray<Real> &bcc, AthenaArray<Real> &cons)
 {
   Real g1  = pmb->peos->GetGamma()-1.0;
-  AthenaArray<Real> dens, temp0, zmet, dener, dtcool, edot, vtot;
+  AthenaArray<Real> dens, temp0, zmet, dener, dtcool, edot, vtot, wght;
   dens.NewAthenaArray(prim.GetDim1());
   temp0.NewAthenaArray(prim.GetDim1());
   zmet.NewAthenaArray(prim.GetDim1());
   dener.NewAthenaArray(prim.GetDim1()); // Delta E by which to change total energy
-  dtcool.NewAthenaArray(prim.GetDim1());
   edot.NewAthenaArray(prim.GetDim1());
   vtot.NewAthenaArray(prim.GetDim1());
+  wght.NewAthenaArray(prim.GetDim1());
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     for (int j=pmb->js; j<=pmb->je; ++j) {
-#pragma omp simd
+//#pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
+        Real pc, pr;
         dens(i)  = prim(IDN,k,j,i); 
         if (DUAL_ENERGY) {
-          temp0(i) = prim(IGE,k,j,i)/prim(IDN,k,j,i); // IGE is pressure
+          pc       = prim(IGE,k,j,i); 
+          temp0(i) = pc/prim(IDN,k,j,i); // IGE is pressure
         } else {
-          temp0(i) = prim(IPR,k,j,i)/prim(IDN,k,j,i); 
+          pc       = prim(IPR,k,j,i);
+          temp0(i) = (pc < 1e-17 ? 1.0e4 : pc/prim(IDN,k,j,i)); 
         }
         vtot(i)  = std::sqrt(  SQR(prim(IVX,k,j,i))
                              + SQR(prim(IVY,k,j,i))
                              + SQR(prim(IVZ,k,j,i))
-                             + (temp0(i) < 1.0e4 ? 1.0e4 : temp0(i)) );
+                             + (temp0(i) < 1.0e4 ? 1.0e4 : temp0(i)) ); // temperature floor.
         zmet(i)  = prim(NHYDRO-NSCALARS,k,j,i);
+        pr       = ProfileFunc(pmb->pcoord->x1v(i))*pparam->Temp();
+        // Reduces cooling if pressure within 10% of profile pressure
+        Real xwh  = 3e1*(pc-1.3*pr)/pr;
+        Real xwl  = 3e1*(pc-0.7*pr)/pr;
+        wght(i)  = 0.5*(1.0+std::tanh(xwh)) + 0.5*(1.0-std::tanh(xwl));
+        //wght(i)  = fabs(xw); 
+        //wght(i)  = std::min(1.0,std::max(0.0,wght(i)));
       }
-      //for (int i=pmb->is; i<=pmb->ie; ++i) {
-      //  if (temp0(i) <= 0.0) {
-      //    std::stringstream msg;
-      //    msg << "### FATAL ERROR in galpause.cpp: HeatCool: temp0 <=0" << std::endl
-      //        << "    p=" << std::setw(5) << Globals::my_rank << " i=" << std::setw(5) << i << " j=" << std::setw(5) << j << " k=" << std::setw(5) << k << std::endl
-      //        << "    temp0=" << std::scientific << std::setw(13) << std::setprecision(5) << temp0(i)
-      //        << "    dens=" << std::scientific << std::setw(13) << std::setprecision(5) << dens (i)<< std::endl;
-      //    throw std::runtime_error(msg.str().c_str());
-      //  }
-      //}
       // Find the temperature change that corresponds to the amount of energy change based on cooling curve at given dt.
       // Cannot be parallelized because of function calls.
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         Real temp1 = pcoolfunc->BracketRoot(dens(i),temp0(i),vtot(i),zmet(i),dt);
         Real temp2 = pcoolfunc->FindRoot(dens(i),temp0(i),temp1,vtot(i),zmet(i),dt);
-        dener(i)   = dens(i)*(temp2-temp0(i))/g1;
+        dener(i)   = wght(i) * dens(i)*(temp2-temp0(i))/g1;
       }
 #pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
@@ -760,9 +772,9 @@ void HeatCool(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
   temp0.DeleteAthenaArray();
   zmet.DeleteAthenaArray();
   dener.DeleteAthenaArray(); // Delta E by which to change total energy
-  dtcool.DeleteAthenaArray();
   edot.DeleteAthenaArray();
   vtot.DeleteAthenaArray();
+  wght.DeleteAthenaArray();
 
   return;
 }
@@ -778,31 +790,41 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
   Real g1     = pmb->peos->GetGamma()-1.0;
   Real dtcool = HUGE_NUMBER;// allows it to grow
 
-  AthenaArray<Real> w, dens, temp0, zmet, vtot;
+  AthenaArray<Real> w, dens, temp0, zmet, vtot, wght;
   w.InitWithShallowCopy(pmb->phydro->w);
   dens.NewAthenaArray(w.GetDim1());
   temp0.NewAthenaArray(w.GetDim1());
   zmet.NewAthenaArray(w.GetDim1());
   vtot.NewAthenaArray(w.GetDim1());
+  wght.NewAthenaArray(w.GetDim1());
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     for (int j=pmb->js; j<=pmb->je; ++j) {
-#pragma omp simd
+//#pragma omp simd
       for (int i=pmb->is; i<=pmb->ie; ++i) {
+        Real pc, pr;
         dens(i)  = w(IDN,k,j,i); 
         if (DUAL_ENERGY) {
-          temp0(i) = w(IGE,k,j,i)/dens(i); // IGE is pressure
+          pc       = w(IGE,k,j,i);
+          temp0(i) = pc/dens(i); // IGE is pressure
         } else {
-          temp0(i) = w(IPR,k,j,i)/dens(i);
+          pc       = w(IPR,k,j,i);
+          temp0(i) = (pc < 1e-17 ? 1.0e4 : pc/dens(i));
         }
         vtot(i)  = std::sqrt(  SQR(w(IVX,k,j,i))
                              + SQR(w(IVY,k,j,i))
                              + SQR(w(IVZ,k,j,i))
                              + (temp0(i) < 1.0e4 ? 1.0e4 : temp0(i)) );
         zmet(i)  = w(NHYDRO-NSCALARS,k,j,i);
+        pr       = ProfileFunc(pmb->pcoord->x1v(i))*pparam->Temp(); 
+        Real xwh  = 3e1*(pc-1.3*pr)/pr;
+        Real xwl  = 3e1*(pc-0.7*pr)/pr;
+        wght(i)  = 0.5*(1.0+std::tanh(xwh)) + 0.5*(1.0-std::tanh(xwl));
+        //wght(i)  = fabs(10.0*(pc-pr)/pr);
+        //wght(i)  = std::min(1.0,std::max(0.0,wght(i)));
       } 
       for (int i=pmb->is; i<=pmb->ie; ++i) {
-        Real dttemp   = coolsafe*temp0(i)/(fabs(pcoolfunc->HeatCoolFunc(dens(i),temp0(i),vtot(i),zmet(i)))+1e-60);
+        Real dttemp   = coolsafe*temp0(i)/(wght(i)*fabs(pcoolfunc->HeatCoolFunc(dens(i),temp0(i),vtot(i),zmet(i)))+1e-60);
         if (TIMESTEPINFO_ENABLED) {
           if (dttemp < dtcool) {
             pmb->all_min_dts(8)   = dttemp;
@@ -823,9 +845,27 @@ Real HeatCoolTimeStep(MeshBlock *pmb)
   temp0.DeleteAthenaArray();
   zmet.DeleteAthenaArray();
   vtot.DeleteAthenaArray();
+  wght.DeleteAthenaArray();
 
   return dtcool;
 }
+
+//#############################################################
+// Conduction
+//=============================================================
+void SpitzerConduction(HydroDiffusion *phdif, MeshBlock *pmb, const AthenaArray<Real> &prim,
+     const AthenaArray<Real> &bcc, int is, int ie, int js, int je, int ks, int ke) {
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+#pragma omp simd
+      for (int i=is; i<=ie; ++i) {
+        phdif->kappa(ISO,k,j,i) = phdif->kappa_iso * std::pow(1e-8*prim(IPR,k,j,i)/prim(IDN,k,j,i),2.5); // Spitzer conductivity
+      }
+    }
+  }
+  return;
+}
+
 
 //========================================================================================
 //! \fn void WallVel(Real xf, int i, Real time, Real dt, int dir, AthenaArray<Real> gridData)
@@ -877,51 +917,196 @@ void UpdateGridData(Mesh *pm) {
 
   pm->GridData(3) = pm->mesh_size.x1max;
   MeshBlock *pmb = pm->pblock;
-  Real myVel = 0.0;
-  Real cellsize = pm->mesh_size.x1max/pm->mesh_size.nx1;
-  Real posUp = 0.5*pm->mesh_size.x1max;
-  Real posLow = 0.4*pm->mesh_size.x1max;// - 15.0*cellsize;
-  Real velAve=0.0, vol=0.0;
-  while (pmb != NULL) {
-    for (int k=pmb->ks; k<=pmb->ke; ++k) {
-      for (int j=pmb->js; j<=pmb->je; ++j) {
-        for (int i=pmb->is; i<=pmb->ie; ++i) {
-          Real pos  = pmb->pcoord->x1v(i);
-          Real dvol = pmb->pcoord->GetCellVolume(k,j,i);
-          Real w = (Real) ((pos<=posUp) && (pos>=posLow));
-          Real d  = pmb->phydro->u(IDN,k,j,i);
-          Real c2 = pmb->phydro->u(NHYDRO-NSCALARS+2,k,j,i)/d;
-          velAve += pmb->phydro->u(IM1,k,j,i)/d * dvol * c2 * w;
-          vol    += dvol * c2 * w;
+
+  if (itrack == 0) { // analytic fit, see page 121 and findexpansion.py 
+    pm->GridData(2) = vtrack0;
+    return;
+  } else if (itrack == 1) {
+    Real myVel = 0.0;
+    Real cellsize = pm->mesh_size.x1max/pm->mesh_size.nx1;
+    Real posUp = 0.5*pm->mesh_size.x1max;
+    Real posLow = 0.4*pm->mesh_size.x1max;// - 15.0*cellsize;
+    Real velAve=0.0, vol=0.0;
+    while (pmb != NULL) {
+      for (int k=pmb->ks; k<=pmb->ke; ++k) {
+        for (int j=pmb->js; j<=pmb->je; ++j) {
+          for (int i=pmb->is; i<=pmb->ie; ++i) {
+            Real pos  = pmb->pcoord->x1v(i);
+            Real dvol = pmb->pcoord->GetCellVolume(k,j,i);
+            Real w = (Real) ((pos<=posUp) && (pos>=posLow));
+            Real d  = pmb->phydro->u(IDN,k,j,i);
+            Real c2 = pmb->phydro->u(NHYDRO-NSCALARS+2,k,j,i)/d;
+            velAve += pmb->phydro->u(IM1,k,j,i)/d * dvol * c2 * w;
+            vol    += dvol * c2 * w;
+          }
         }
       }
+      pmb = pmb->next;
     }
-    pmb = pmb->next;
-  }
 #ifdef MPI_PARALLEL
-  Real arr[2];
-  arr[0] = velAve;
-  arr[1] = vol;
-  MPI_Allreduce(MPI_IN_PLACE,&arr,2,MPI_ATHENA_REAL,MPI_SUM,
-                MPI_COMM_WORLD);
-  velAve = arr[0];
-  vol    = arr[1];
+    Real arr[2];
+    arr[0] = velAve;
+    arr[1] = vol;
+    MPI_Allreduce(MPI_IN_PLACE,&arr,2,MPI_ATHENA_REAL,MPI_SUM,
+                  MPI_COMM_WORLD);
+    velAve = arr[0];
+    vol    = arr[1];
 #endif
+    velAve = velAve/(vol+1e-30);
+    myVel = boost*velAve;
+    if ((myVel <=0.0)) {
+      myVel = 0.0;
+    }
+    // different attempt:
+    //Real tref = 0.05*xMax/pparam->Vwind();
+    //myVel = std::min(pm->time*pparam->Vwind()/tref,pparam->Vwind());
+    pm->GridData(2) = myVel;
+    //fprintf(stdout,"[UpdateGridData]: vel = %17.9e xmax = %17.9e\n",pm->GridData(2),pm->GridData(3));
+    return;
+  } else { // itrack > 1
+    Real vtrack = 0.0;
+    Real gamma  = pmb->peos->GetGamma();
+    int ntr=0;
+    AthenaArray<Real> weight, quant, radius;
+    Real totweight = 0.0, totquant = 0.0, totradius = 0.0;
+    while (pmb != NULL) {
+      int is=pmb->is, ie=pmb->ie, js=pmb->js, je=pmb->je, ks=pmb->ks, ke=pmb->ke;
+      if (pm->dimension == 1) {
+        weight.NewAthenaArray(1,1,pmb->block_size.nx1+2*NGHOST);
+        quant.NewAthenaArray(1,1,pmb->block_size.nx1+2*NGHOST);
+        radius.NewAthenaArray(1,1,pmb->block_size.nx1+2*NGHOST);
+      } else if (pm->dimension == 2) {
+        weight.NewAthenaArray(1,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        quant.NewAthenaArray(1,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        radius.NewAthenaArray(1,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+      } else {
+        weight.NewAthenaArray(pmb->block_size.nx3+2*NGHOST,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        quant.NewAthenaArray(pmb->block_size.nx3+2*NGHOST,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+        radius.NewAthenaArray(pmb->block_size.nx3+2*NGHOST,pmb->block_size.nx2+2*NGHOST,pmb->block_size.nx1+2*NGHOST);
+      }
+      for (int k=ks; k<=ke; ++k) {
+        for (int j=js; j<=je; ++j) {
+#pragma omp simd
+          for (int i=is; i<=ie; ++i) {
+            Real rad = pmb->pcoord->x1v(i);
+            quant(k,j,i)  = rad;
+            radius(k,j,i) = rad;
+          }
+        }
+      }
+      if (DUAL_ENERGY) {
+        for (int k=ks; k<=ke; ++k) {
+          for (int j=js; j<=je; ++j) {
+#pragma omp simd
+            for (int i=is; i<=ie; ++i) {
+              weight(k,j,i) = pmb->phydro->u(IIE,k,j,i);
+            }
+          }
+        }
+      } else {
+        for (int k=ks; k<=ke; ++k) {
+          for (int j=js; j<=je; ++j) {
+#pragma omp simd
+            for (int i=is; i<=ie; ++i) {
+              Real ekin = 0.5*( SQR(pmb->phydro->u(IM1,k,j,i))
+                               +SQR(pmb->phydro->u(IM2,k,j,i))
+                               +SQR(pmb->phydro->u(IM3,k,j,i)))
+                             / pmb->phydro->u(IDN,k,j,i);
+              Real emag = 0.0;
+              if (MAGNETIC_FIELDS_ENABLED) {
+                emag = 0.5*( SQR(pmb->pfield->bcc(IB1,k,j,i))
+                            +SQR(pmb->pfield->bcc(IB2,k,j,i))
+                            +SQR(pmb->pfield->bcc(IB3,k,j,i)));
+              }
+              weight(k,j,i) = pmb->phydro->u(IEN,k,j,i)-ekin-emag;
+            }
+          }
+        }
+      }
+      if (pm->dimension == 1) {
+#pragma omp simd
+        for (int i=is+1; i<=ie-1; ++i) {
+          Real gr    =   (weight(ks ,js, i+1)-weight(ks ,js, i-1))
+                        /(pmb->pcoord->x1v(i+1)-pmb->pcoord->x1v(i-1));
+          Real q     = quant(ks,js,i);
+          Real r     = radius(ks,js,i);
+          Real w     = std::fabs(gr);
+          q         *= w;
+          r         *= w;
+          totquant  += q;
+          totweight += w;
+          totradius += r;
+        }
+      } else if (pm->dimension == 2) {
+        for (int j=js; j<=je; ++j) { // only radial gradient here, hence use whole j range
+#pragma omp simd
+          for (int i=is+1; i<=ie-1; ++i) {
+            Real gr    =   (weight(ks ,j, i+1)-weight(ks ,j, i-1))
+                          /(pmb->pcoord->x1v(i+1)-pmb->pcoord->x1v(i-1));
+            Real q     = quant(ks,j,i);
+            Real r     = radius(ks,j,i);
+            Real w     = std::fabs(gr);
+            q         *= w;
+            r         *= w;
+            totquant  += q;
+            totweight += w;
+            totradius += r;
+          }
+        }
+      } else {
+        for (int k=ks; k<=ke; ++k) {
+          for (int j=js; j<=je; ++j) { // only radial gradient here, hence use whole j range
+#pragma omp simd
+            for (int i=is+1; i<=ie-1; ++i) {
+              Real gr    =   (weight(k,j, i+1)-weight(k,j, i-1))
+                            /(pmb->pcoord->x1v(i+1)-pmb->pcoord->x1v(i-1));
+              Real q     = quant(k,j,i);
+              Real r     = radius(k,j,i);
+              Real w     = std::fabs(gr);
+              q         *= w;
+              r         *= w;
+              totquant  += q;
+              totweight += w;
+              totradius += r;
+            }
+          }
+        }
+      }
+      weight.DeleteAthenaArray();
+      quant.DeleteAthenaArray();
+      radius.DeleteAthenaArray();
+      pmb = pmb->next;
+    }  // while (pmb != NULL)
 
-  velAve = velAve/(vol+1e-30);
-    
-  myVel = velAve;
-  if ((myVel <=0.0)) {
-    myVel = 0.0;
+    ntr = (pm->ncycle >= maxntrack) ? maxntrack-1 : pm->ncycle; // number of elements to track
+    if (ncycold < pm->ncycle) { // do not update during substep
+      ncycold = pm->ncycle;
+      if (ntr == 0) { // first iteration
+        ttrack(0) = 0.0;
+        rtrack(0) = totquant;
+        vtrack    = 0.0;
+      } else { // all subsequent iterations
+        for (int m=0; m<ntr; ++m) { // shift old elements 
+          ttrack(ntr-m) = ttrack(ntr-m-1);
+          rtrack(ntr-m) = rtrack(ntr-m-1);
+        }
+        ttrack(0) = pm->time; // add new element
+        rtrack(0) = totquant;
+      }
+    }
+    vtrack = 0.0;
+    for (int m=1; m<ntr; ++m) { // calculate front velocity as average over tracking elements
+      Real vt = (rtrack(m-1)-rtrack(m))/(ttrack(m-1)-ttrack(m)) * (pm->GridData(3)/totradius);
+      vtrack += vt;
+    }
+    if (ntr > 0) vtrack /= ntr;
+    if (ntr < maxntrack-1) vtrack = 0.0; // Prevent oscillations due to poor statistics early on. 
+    vtrack = (vtrack <= 0.0) ? 0.0 : vtrack; // enforce expansion
+    vtrack *= boost;
+    //if (Globals::my_rank == 0)
+    //  fprintf(stdout,"[UpdateGrid]: time=%13.5e vtrack=%13.5e xmax =%13.5e\n",pm->time,vtrack,pm->GridData(3));
+    pm->GridData(2) = vtrack;
   }
-
-  // different attempt:
-  //Real tref = 0.05*xMax/pparam->Vwind();
-  //myVel = std::min(pm->time*pparam->Vwind()/tref,pparam->Vwind());
-
-  pm->GridData(2) = expboost*myVel;
-  
-  //fprintf(stdout,"[UpdateGridData]: vel = %17.9e xmax = %17.9e\n",pm->GridData(2),pm->GridData(3));
   return;
 }
 
@@ -1027,11 +1212,15 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     SetGridData(4);
     EnrollGridDiffEq(WallVel);
     EnrollCalcGridData(UpdateGridData);
+    ttrack.NewAthenaArray(maxntrack); // for position tracking
+    rtrack.NewAthenaArray(maxntrack);
     
     GridData(0) = mesh_size.x1min;
     GridData(1) = 1; 
     GridData(2) = 0.0;
     GridData(3) = mesh_size.x1max; 
+    itrack      = pin->GetOrAddInteger("problem","itrack",0); // 0: old galpause (ring) tracking, 1: pressure tracking
+    vtrack0     = pin->GetOrAddReal("problem","vtrack0",0.0); // tracking velocity for (here) constant expansion
   }
 
   gam      = pin->GetReal("hydro","gamma");
@@ -1040,12 +1229,14 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   coolsafe = pin->GetOrAddReal("problem","coolsafe",0.05);
   zmetwind = pin->GetOrAddReal("problem","zmetwind",1.0);
   zmethalo = pin->GetOrAddReal("problem","zmethalo",0.1);
+  int ikappa = pin->GetOrAddInteger("problem","ikappa",0); // ikappa == 1: Spitzer Conduction
   if (icool > 0) {
     EnrollUserExplicitSourceFunction(HeatCool);
     EnrollUserTimeStepFunction(HeatCoolTimeStep);
   }
 
-  //EnrollStaticGravPotFunction(BetaPotential);
+  if (ikappa == 1) 
+    EnrollConductionCoefficient(SpitzerConduction);
 
   int iprof = pin->GetOrAddInteger("problem","iprof",1);
   if (iprof == 0) {
@@ -1299,7 +1490,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   icool     = pin->GetOrAddInteger("problem","icool",0); // 0: no cooling, 1: power-law cooling, 2: WSS09 cooling
   turbcool  = pin->GetOrAddReal("problem","turbcool",0.0); // add turbulent heating
-  expboost  = pin->GetOrAddReal("problem","expboost",1.0); // 2.0 works ok for full angle. 
+  boost     = pin->GetReal("problem","boost"); // 2.0 works ok for full angle. 
   // potential parameters
   Real vesc = pin->GetReal("problem","vesc"); // km/s 
   Real temp = pin->GetReal("problem","temp0");
@@ -1327,6 +1518,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   }
   if (icool > 0) { // allocate scratch arrays
     lengthcool = pin->GetOrAddReal("problem","lengthcool",1.13584e3); // set to 10kpc by default
+    tolcool    = pin->GetOrAddReal("problem","tolcool",1.0e-12); // tolerance for implicit temperature equation
   }
 
   // only spherical coordinates
@@ -1418,7 +1610,7 @@ void Mesh::UserWorkInLoop(void) {
 
   if (EXPANDING_ENABLED) {
     if (Globals::my_rank==0) {
-      if (x1rat < 0.0) {
+      if ((x1rat < 0.0) && (mesh_size.nx2 > 1)) {
         Real nx2exp = (PI*std::pow(mesh_size.x1max/mesh_size.x1min,0.5/mesh_size.nx1))
                      /(std::pow(mesh_size.x1max/mesh_size.x1min,1.0/mesh_size.nx1)-1.0);
         fprintf(stdout,"[UserWorkInLoop]: rmax = %13.5e nx2exp/nx2 = %13.5e\n",mesh_size.x1max,nx2exp/((Real) mesh_size.nx2));
@@ -1448,6 +1640,7 @@ void Mesh::UserWorkInLoop(void) {
   Real u[NHYDRO];
 
   bool allfail = false, fail = false;
+  int ifail = 0;
 
   while (pmb != NULL) { // collect results from individual pmbs
     for (int k=pmb->ks; k<=pmb->ke; k++) {
@@ -1464,24 +1657,25 @@ void Mesh::UserWorkInLoop(void) {
             fail = fail || isnan(pmb->phydro->u(IIE,k,j,i)) || (pmb->phydro->u(IIE,k,j,i) <= 0.0); 
           }
           if (fail) {
-            if (DUAL_ENERGY) {
-              std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
-                        << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
-                        << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
-                        << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
-                        << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
-                        << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
-                        << " ei=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IIE,k,j,i)
-                        << std::endl;
-            } else {
-              std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
-                        << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
-                        << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
-                        << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
-                        << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
-                        << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
-                        << std::endl;
-            }
+            //if (DUAL_ENERGY) {
+            //  std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
+            //            << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
+            //            << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
+            //            << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
+            //            << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
+            //            << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
+            //            << " ei=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IIE,k,j,i)
+            //            << std::endl;
+            //} else {
+            //  std::cout << "[UserWorkInLoop]: Warning: i=" << std::setw(4) << i << " j=" << std::setw(4) << j << " k=" << std::setw(4) << k
+            //            << " d =" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IDN,k,j,i)
+            //            << " m1=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM1,k,j,i)
+            //            << " m2=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM2,k,j,i)
+            //            << " m3=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IM3,k,j,i)
+            //            << " et=" << std::scientific << std::setw(11) << std::setprecision(3) << pmb->phydro->u(IEN,k,j,i)
+            //            << std::endl;
+            //}
+            ifail++;
           } 
           Real dx1  = pmb->pcoord->dx1f(i);
           Real x1  = pmb->pcoord->x1v(i);
@@ -1532,15 +1726,22 @@ void Mesh::UserWorkInLoop(void) {
           Real vt   = std::sqrt(SQR(u[IM1])+SQR(u[IM2])+SQR(u[IM3]))/SQR(u[IDN]);
           Real temp = gm1*ener[2]/u[IDN];
           Real zmet = u[NHYDRO-NSCALARS]/u[IDN];
-          if (icool > 0) 
-            lengrat[0] = std::min(lengrat[0],temp*std::sqrt(temp)/(dx1*fabs(pcoolfunc->HeatCoolFunc(u[IDN],temp,vt,zmet)))); // cooling length
-          lengrat[1] = std::min(lengrat[1],std::sqrt(PI*temp/u[IDN])/dx1); // Jeans length
+          if (icool > 0) {
+            Real cf    = fabs(pcoolfunc->HeatCoolFunc(u[IDN],temp,vt,zmet));
+            lengrat[0] = std::min(lengrat[0],temp*std::sqrt(temp)/(dx1*cf)); // cooling length
+            if (pmb->phydro->phdif->kappa_iso > 0.0) 
+              lengrat[1] = std::min(lengrat[1],std::sqrt(pmb->phydro->phdif->kappa(ISO,k,j,i)*temp/(u[IDN]*cf))/dx1); // Jeans length
+          }
           //fprintf(stdout,"[UserWorkInLoop]: i=%2i d=%13.5e v=%13.5e e=%13.5e\n",i,u[IDN],u[IM1]/u[IDN],u[IEN]);
           allfail = (fail || allfail);
         }
       }
     }
     pmb = pmb->next;
+  }
+
+  if (allfail) {
+    std::cout << "[UserWorkInLoop]: p=" << std::setw(4) << Globals::my_rank << ": failure in " << std::setw(9) << ifail << " cells." << std::endl;
   }
 
 #ifdef MPI_PARALLEL
@@ -1551,13 +1752,14 @@ void Mesh::UserWorkInLoop(void) {
   ierr = MPI_Allreduce(MPI_IN_PLACE,&trac,3 ,MPI_ATHENA_REAL,MPI_SUM,MPI_COMM_WORLD);
   ierr = MPI_Allreduce(MPI_IN_PLACE,&lengrat,2,MPI_ATHENA_REAL,MPI_MIN,MPI_COMM_WORLD);
   ierr = MPI_Allreduce(MPI_IN_PLACE,&allfail,1,MPI_C_BOOL,MPI_LOR,MPI_COMM_WORLD);
+  ierr = MPI_Allreduce(MPI_IN_PLACE,&ifail,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
 #endif
   for (int q=1; q<nq; q++) qtot[q] /= qtot[0];
   for (int q=1; q<3;  q++) trac[q] /= trac[0];
 
   if (Globals::my_rank==0) {
     std::cout << "[UserWorkInLoop]: lcool= " << std::scientific << std::setw(13) << std::setprecision(5) << lengrat[0]
-              << " lgrv= "                   << std::scientific << std::setw(13) << std::setprecision(5) << lengrat[1]
+              << " lfield= "                   << std::scientific << std::setw(13) << std::setprecision(5) << lengrat[1]
               << std::endl;
     std::cout << "[UserWorkInLoop]: vrad = " << std::scientific << std::setw(13) << std::setprecision(5) << trac[1]
               << " rad = "                   << std::scientific << std::setw(13) << std::setprecision(5) << trac[2]
@@ -1606,14 +1808,12 @@ void Mesh::UserWorkInLoop(void) {
                 << std::endl;
 
   }
-  
-  if (!(RECOVER_ENABLED)) {
-    if (qmin[3] <= 0.0)  {
-      std::cout << "[UserWorkInLoop]: eint < 0" << std::endl;
-      stop_this();
+
+  if (allfail) {
+    if (Globals::my_rank == 0) {
+      std::cout << "[UserWorkInLoop]: failure in " << std::setw(9) << ifail << " cells." << std::endl;
     }
-    if (allfail) {
-      std::cout << "[UserWorkInLoop]: failure" << std::endl;
+    if (!(RECOVER_ENABLED)) {
       stop_this();
     }
   }

@@ -56,7 +56,7 @@ Real vtrack0, boost,x1rat;
 AthenaArray<Real> ttrack,rtrack;
 
 //Global Variables for OuterX1
-int ibtype;
+int ibtype,ibinit;
 Real ambdens, ambvel, ambpres, drat, prat;
 Real b0, bx0, by0, bz0, angle;
 // The expanding grid requires user-defined boundary functions only for axes
@@ -1190,6 +1190,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
       bx0 = 0.0;
       by0 = 0.0;
     }
+   ibinit = pin->GetOrAddReal("problem","ibinit",0); // 0: use field, 1: use vector potential (need to implement boundaries!)
   }
   Real gamma = peos->GetGamma();
   Real gm1 = gamma - 1.0;
@@ -1339,54 +1340,108 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         }
       }
     } else if (COORDINATE_SYSTEM == "spherical_polar") {
-      for (int k=ks; k<=ke; k++) {
-        Real phi = pcoord->x3v(k);
-        for (int j=js; j<=je; j++) {
-          Real theta = pcoord->x2v(j);
-          for (int i=is; i<=ie+1; i++) {
-            if (ibtype == 0) {
-              pfield->b.x1f(k,j,i) =   std::sin(theta)*std::cos(phi)*bx0
-                                     + std::sin(theta)*std::sin(phi)*by0
-                                     + std::cos(theta)*bz0;
-            } else if (ibtype == 1) {
-              pfield->b.x1f(k,j,i) = 0.0; 
-            } else if (ibtype == 2) {
-              pfield->b.x1f(k,j,i) = 0.0;  
+      if (ibinit == 0) {
+        for (int k=ks; k<=ke; k++) {
+          Real phi = pcoord->x3v(k);
+          for (int j=js; j<=je; j++) {
+            Real theta = pcoord->x2v(j);
+            for (int i=is; i<=ie+1; i++) {
+              if (ibtype == 0) {
+                pfield->b.x1f(k,j,i) =   std::sin(theta)*std::cos(phi)*bx0
+                                       + std::sin(theta)*std::sin(phi)*by0
+                                       + std::cos(theta)*bz0;
+              } else if (ibtype == 1) {
+                pfield->b.x1f(k,j,i) = 0.0; 
+              } else if (ibtype == 2) {
+                pfield->b.x1f(k,j,i) = 0.0;  
+              }
             }
           }
         }
-      }
-      for (int k=ks; k<=ke; k++) {
-        Real phi   = pcoord->x3v(k);
-        for (int j=js; j<=je+1; j++) {
-          Real theta = pcoord->x2f(j);
-          for (int i=is; i<=ie; i++) {
-            if (ibtype == 0) {
-              pfield->b.x2f(k,j,i) =   std::cos(theta)*std::cos(phi)*bx0
-                                     + std::cos(theta)*std::sin(phi)*by0
-                                     - std::sin(theta)*bz0;
-            } else if (ibtype == 1) {
-              pfield->b.x2f(k,j,i) = 0.0;
-            } else if (ibtype == 2) {
-              pfield->b.x2f(k,j,i) = bz0;
+        for (int k=ks; k<=ke; k++) {
+          Real phi   = pcoord->x3v(k);
+          for (int j=js; j<=je+1; j++) {
+            Real theta = pcoord->x2f(j);
+            for (int i=is; i<=ie; i++) {
+              if (ibtype == 0) {
+                pfield->b.x2f(k,j,i) =   std::cos(theta)*std::cos(phi)*bx0
+                                       + std::cos(theta)*std::sin(phi)*by0
+                                       - std::sin(theta)*bz0;
+              } else if (ibtype == 1) {
+                pfield->b.x2f(k,j,i) = 0.0;
+              } else if (ibtype == 2) {
+                pfield->b.x2f(k,j,i) = bz0;
+              }
             }
           }
         }
-      }
-      for (int k=ks; k<=ke+1; k++) {
-        for (int j=js; j<=je; j++) {
-          for (int i=is; i<=ie; i++) {
-            if (ibtype == 0) {
-              Real phi = pcoord->x3f(k);
-              pfield->b.x3f(k,j,i) = - std::sin(phi)*bx0
-                                     + std::cos(phi)*by0;
-            } else if (ibtype == 1) {
-              pfield->b.x3f(k,j,i) = bz0;
-            } else if (ibtype == 2) {
-              pfield->b.x3f(k,j,i) = 0.0;
+        for (int k=ks; k<=ke+1; k++) {
+          for (int j=js; j<=je; j++) {
+            for (int i=is; i<=ie; i++) {
+              if (ibtype == 0) {
+                Real phi = pcoord->x3f(k);
+                pfield->b.x3f(k,j,i) = - std::sin(phi)*bx0
+                                       + std::cos(phi)*by0;
+              } else if (ibtype == 1) {
+                pfield->b.x3f(k,j,i) = bz0;
+              } else if (ibtype == 2) {
+                pfield->b.x3f(k,j,i) = 0.0;
+              }
             }
           }
         }
+      } else { // ibinit == 1: vector potential for uniform field
+        AthenaArray<Real> ax,ay,az;
+        int nx1 = (ie-is)+1 + 2*(NGHOST);
+        int nx2 = (je-js)+1 + 2*(NGHOST);
+        int nx3 = (ke-ks)+1 + 2*(NGHOST);
+        ax.NewAthenaArray(nx3,nx2,nx1);
+        ay.NewAthenaArray(nx3,nx2,nx1);
+        az.NewAthenaArray(nx3,nx2,nx1);
+        for (int k=ks; k<=ke+1; k++) {
+          for (int j=js; j<=je+1; j++) {
+            for (int i=is; i<=ie+1; i++) {
+              ax(k,j,i) = 0.0;
+              ay(k,j,i) = 0.0;
+              if ((SQR(pcoord->x1f(i)-x0) + SQR(pcoord->x2f(j)-y0)) < rout*rout) {
+                az(k,j,i) = 1e-3*(rout - std::sqrt(SQR(pcoord->x1f(i)-x0) +
+                                                  SQR(pcoord->x2f(j)-y0)));
+              } else {
+                az(k,j,i) = 0.0;
+              }
+            }
+          }
+        }
+        // initialize interface B
+        for (int k=ks; k<=ke; k++) {
+          for (int j=js; j<=je; j++) {
+            for (int i=is; i<=ie+1; i++) {
+              pfield->b.x1f(k,j,i) = (az(k,j+1,i) - az(k,j,i))/pcoord->dx2f(j) -
+                                     (ay(k+1,j,i) - ay(k,j,i))/pcoord->dx3f(k);
+            }
+          }
+        }
+        for (int k=ks; k<=ke; k++) {
+          for (int j=js; j<=je+1; j++) {
+            for (int i=is; i<=ie; i++) {
+              pfield->b.x2f(k,j,i) = (ax(k+1,j,i) - ax(k,j,i))/pcoord->dx3f(k) -
+                                     (az(k,j,i+1) - az(k,j,i))/pcoord->dx1f(i);
+            }
+          }
+        }
+        for (int k=ks; k<=ke+1; k++) {
+          for (int j=js; j<=je; j++) {
+            for (int i=is; i<=ie; i++) {
+              pfield->b.x3f(k,j,i) = (ay(k,j,i+1) - ay(k,j,i))/pcoord->dx1f(i) -
+                                     (ax(k,j+1,i) - ax(k,j,i))/pcoord->dx2f(j);
+            }
+          }
+        }
+
+        ax.DeleteAthenaArray();
+        ay.DeleteAthenaArray();
+        az.DeleteAthenaArray();
+
       }
     }
     // initialize total energy

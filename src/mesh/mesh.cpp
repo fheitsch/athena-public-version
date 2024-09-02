@@ -2747,9 +2747,7 @@ bool Mesh::CheckAndReset(Mesh *pm) {
     if (Globals::my_rank==0) {
       if (failed) {
         std::cout << "[Mesh::CheckAndReset]: integration failed" << std::endl;
-      } else {
-        std::cout << "[Mesh::CheckAndReset]: integration succeeded" << std::endl; 
-      }
+      } 
     }
 
     while (pmb != NULL) { 
