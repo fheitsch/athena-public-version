@@ -2209,10 +2209,10 @@ void Mesh::AdaptiveMeshRefinement(ParameterInput *pin) {
             BufferUtility::Pack3DData(pb->pfield->b.x3f, sendbuf[k],
                                       is, ie, js, je, ks, ke+f3, p);
           }
-					if (CLESS_ENABLED) {
-						BufferUtility::Pack4DData(pb->pcless->u, sendbuf[k], 0, NCLESS-1,
-																			is, ie, js, je, ks, ke, p); 
-					}
+          if (CLESS_ENABLED) {
+            BufferUtility::Pack4DData(pb->pcless->u, sendbuf[k], 0, NCLESS-1,
+                                      is, ie, js, je, ks, ke, p); 
+          }
           int tag=CreateAMRMPITag(nn+l-nslist[newrank[nn+l]], 0, 0, 0);
           MPI_Isend(sendbuf[k], bsc2f, MPI_ATHENA_REAL, newrank[nn+l],
                     tag, MPI_COMM_WORLD, &(req_send[k]));

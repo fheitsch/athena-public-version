@@ -46,12 +46,31 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
   Real igm1 = 1.0/gm1;
   Real iso_cs = pmy_block->peos->GetIsoSoundSpeed();
 
+  Expansion *ex = pmy_block->pex;
+  AthenaArray<Real> &eFlx = ex->expFlux[(ivx-1)];
+  AthenaArray<Real> &eVel = ex->vf[(ivx-1)];
+  bool move;
+  if (EXPANDING_ENABLED) {
+    move  = false;
+    if ((ivx == IVX)&&(ex->x1Move)){
+      move = true;
+    } else if ((ivx == IVY)&&(ex->x2Move)) {
+      move = true;
+    } else if ((ivx == IVZ)&&(ex->x3Move)){
+      move = true;
+    }
+  }
+  Real wi[(NHYDRO)];
+
   int n;
   for (int k=kl; k<=ku; ++k) {
   for (int j=jl; j<=ju; ++j) {
 //#pragma omp simd private(wli,wri,wroe,fl,fr,flxi)
+//#pragma distribute_point
+//#pragma omp simd private(n,wli,wri,wroe,flxi,fl,fr)
 #pragma distribute_point
-#pragma omp simd private(n,wli,wri,wroe,flxi,fl,fr)
+#pragma omp simd private(n,wli,wri,wroe,flxi,fl,fr,wi)
+
 
   for (int i=il; i<=iu; ++i) {
 
@@ -67,6 +86,8 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
  	wli[IGE]=wl(IGE,k,j,i);
       }
     }
+    for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
+      wli[n] = wl(n,k,j,i);
 
     wri[IDN]=wr(IDN,k,j,i);
     wri[IVX]=wr(ivx,k,j,i);
@@ -78,6 +99,8 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
         wri[IGE]=wr(IGE,k,j,i);
       }
     }
+    for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
+      wri[n] = wr(n,k,j,i);
 
 //--- Step2.  Compute Roe-averaged state
 
@@ -166,11 +189,48 @@ void Hydro::RiemannSolver(const int kl, const int ku, const int jl, const int ju
       }
     }
 
-    if (NSCALARS > 0) {
-      for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++) {
-        flx(n,k,j,i)   = (flxi[IDN] >= 0 ? flxi[IDN]*wli[n] : flxi[IDN]*wri[n]);
+    for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
+      flx(n,k,j,i)   = (flxi[IDN] >= 0 ? flxi[IDN]*wli[n] : flxi[IDN]*wri[n]);
+
+
+    //For Time Dependent grid, account for Wall Flux
+    if ((EXPANDING_ENABLED) && (move)) {
+      Real wallv, e;
+      //--- Step 1. Determine Flux Direction
+      if (ivx == IVX){
+        wallv = eVel(i);
+      } else if (ivx == IVY) {
+        wallv = eVel(j);
+      } else if (ivx == IVZ){
+        wallv = eVel(k);
+      } else {
+        wallv = 0.0;
       }
-    }
+      //--- Step 2. Load primitive Variables
+      if (wallv > 0.0) {
+        for (n=0; n<NHYDRO; ++n)
+          wi[n] = wri[n];
+      } else if (wallv < 0.0) {
+        for (n=0; n<NHYDRO; ++n)
+          wi[n] = wli[n];
+      } else {
+        for (n=0; n<NHYDRO; ++n)
+          wi[n] = 0.0;
+      }
+
+      e = wi[IPR]*igm1 + 0.5*wi[IDN]*(SQR(wi[IVX]) + SQR(wi[IVY]) + SQR(wi[IVZ]));
+      eFlx(IDN,k,j,i) = wi[IDN]*wallv;
+      eFlx(ivx,k,j,i) = wi[IDN]*wi[IVX]*wallv;
+      eFlx(ivy,k,j,i) = wi[IDN]*wi[IVY]*wallv;
+      eFlx(ivz,k,j,i) = wi[IDN]*wi[IVZ]*wallv;
+      eFlx(IEN,k,j,i) = e*wallv;
+      if (DUAL_ENERGY)
+        eFlx(IIE,k,j,i) = wi[IGE]*wallv*igm1; // IGE is pressure
+      for (n=(NHYDRO-NSCALARS); n<NHYDRO; n++)
+        eFlx(n,k,j,i) = wi[IDN]*wi[n]*wallv;
+
+    } //End Expanding
+
   }
   }}
 

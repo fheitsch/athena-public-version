@@ -129,7 +129,9 @@ MeshBlock::MeshBlock(int igid, int ilid, LogicalLocation iloc, RegionSize input_
   // floors depend on EOS (but EOS not needed by Reconstruction constructor)
   precon = new Reconstruction(this, pin);
 
-  if (pm->multilevel==true) pmr = new MeshRefinement(this, pin);
+  if (pm->multilevel==true) {
+    pmr = new MeshRefinement(this, pin);
+  }
 
   // physics-related objects: may depend on Coordinates for diffusion terms
   phydro = new Hydro(this, pin);

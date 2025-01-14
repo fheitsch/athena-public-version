@@ -323,9 +323,8 @@ public:
   void CoordSrcTerms(const Real dt, const AthenaArray<Real> *flux,
     const AthenaArray<Real> &prim, const AthenaArray<Real> &bcc, AthenaArray<Real> &u);
 	// ...to compute geometrical source terms for collisionless variables 
-	void CoordSrcTermsCL(const Real dt, const AthenaArray<Real> *flux,
-											 const AthenaArray<Real> &prim,
-											 AthenaArray<Real> &u);
+  void CoordSrcTermsCL(const Real dt, const AthenaArray<Real> *flux,
+    const AthenaArray<Real> &prim,AthenaArray<Real> &u);
 };
 
 //----------------------------------------------------------------------------------------
@@ -384,10 +383,9 @@ public:
   // ...to compute geometrical source terms
   void CoordSrcTerms(const Real dt, const AthenaArray<Real> *flux,
     const AthenaArray<Real> &prim, const AthenaArray<Real> &bcc, AthenaArray<Real> &u);
-	// ...to compute geometrical source terms for collisionless variables 
-	void CoordSrcTermsCL(const Real dt, const AthenaArray<Real> *flux,
-											 const AthenaArray<Real> &prim,
-											 AthenaArray<Real> &u);
+  // ...to compute geometrical source terms for collisionless variables 
+  void CoordSrcTermsCL(const Real dt, const AthenaArray<Real> *flux,
+    const AthenaArray<Real> &prim, AthenaArray<Real> &u);
 };
 
 //----------------------------------------------------------------------------------------

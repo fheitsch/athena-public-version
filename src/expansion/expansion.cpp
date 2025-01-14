@@ -19,6 +19,7 @@
 #include "../eos/eos.hpp"
 #include "../hydro/hydro.hpp"
 #include "../mesh/mesh.hpp"
+#include "../mesh/mesh_refinement.hpp"
 #include "../coordinates/coordinates.hpp"
 #include "../field/field.hpp"
 #include "../reconstruct/reconstruction.hpp"
@@ -42,6 +43,10 @@ Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin) {
     ie = pmb->ie; je = pmb->je; ke = pmb->ke;
     ng=NGHOST;
   }
+  // for multilevel calculations
+  cis = pmb->cis; cjs = pmb->cjs; cks = pmb->cks;
+  cie = pmb->cie; cje = pmb->cje; cke = pmb->cke;
+  cng=pmb->cnghost;
 
   // Allocate memory for mesh dimensions
   int ncells1 = (ie-is+1) + 2*ng;
@@ -54,6 +59,17 @@ Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin) {
   ku = ke;
   if (pmb->block_size.nx2 > 1) {ncells2 = (je-js+1) + 2*ng; jl = js-ng; ju = je+ng;}
   if (pmb->block_size.nx3 > 1) {ncells3 = (ke-ks+1) + 2*ng; kl = ks-ng; ku = ke+ng;}
+
+  int cncells1 = (cie-cis+1) + 2*cng;
+  cil = cis-cng;
+  ciu = cie+cng;
+  int cncells2 = 1, cncells3 = 1;
+  cjl = cjs;
+  cju = cje;
+  ckl = cks;
+  cku = cke;
+  if (pmb->block_size.nx2 > 1) {cncells2 = (cje-cjs+1) + 2*cng; cjl = cjs-cng; cju = cje+cng;}
+  if (pmb->block_size.nx3 > 1) {cncells3 = (cke-cks+1) + 2*cng; ckl = cks-cng; cku = cke+cng;}
 
   if (COORDINATE_SYSTEM == "cartesian") {
     x1Move = true;
@@ -87,6 +103,22 @@ Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin) {
   vv[X1DIR].NewAthenaArray(ncells1);
   vv[X2DIR].NewAthenaArray(ncells2);
   vv[X3DIR].NewAthenaArray(ncells3);
+
+
+  if (pmy_block->pmy_mesh->multilevel) {
+    cvf[X1DIR].NewAthenaArray(cncells1+1);
+    cvf[X2DIR].NewAthenaArray(cncells2+1);
+    cvf[X3DIR].NewAthenaArray(cncells3+1);
+    cx1_0.NewAthenaArray((cncells1+1));
+    cx2_0.NewAthenaArray((cncells2+1));
+    cx3_0.NewAthenaArray((cncells3+1));
+    cx1_1.NewAthenaArray((cncells1+1));
+    cx2_1.NewAthenaArray((cncells2+1));
+    cx3_1.NewAthenaArray((cncells3+1));
+    cx1_2.NewAthenaArray((cncells1+1));
+    cx2_2.NewAthenaArray((cncells2+1));
+    cx3_2.NewAthenaArray((cncells3+1));
+  }
 
   if (x1Move){
     expFlux[X1DIR].NewAthenaArray(NHYDRO,ncells3,ncells2,ncells1+1);
@@ -139,6 +171,29 @@ Expansion::Expansion(MeshBlock *pmb, ParameterInput *pin) {
 #pragma omp simd
     for (int k=kl; k<=ku;++k) v3v(k) = 0.0;
   }
+
+  // for multilevel we need coarse grid
+  if (pmb->pmy_mesh->multilevel) {
+    AthenaArray<Real> &cv1f = cvf[X1DIR];
+    AthenaArray<Real> &cv2f = cvf[X2DIR];
+    AthenaArray<Real> &cv3f = cvf[X3DIR];
+#pragma omp simd
+    for (int i=cil; i<=ciu+1;++i) {
+      cv1f(i)  = 0.0;
+      cx1_0(i) = pmb->pmr->pcoarsec->x1f(i);
+    }
+#pragma omp simd
+    for (int j=cjl; j<=cju+1;++j) {
+      cv2f(j)  = 0.0;
+      cx2_0(j) = pmb->pmr->pcoarsec->x2f(j);
+    }
+#pragma omp simd
+    for (int k=ckl; k<=cku+1;++k) {
+      cv3f(k)  = 0.0;
+      cx3_0(k) = pmb->pmr->pcoarsec->x3f(k);
+    }
+  }
+
   mydt = (FLT_MAX);
 }
 
@@ -170,6 +225,20 @@ Expansion::~Expansion() {
   if (x2Move) expFlux[X2DIR].DeleteAthenaArray();
   if (x3Move) expFlux[X3DIR].DeleteAthenaArray();
 
+  if (pmy_block->pmy_mesh->multilevel) {
+    cvf[X1DIR].DeleteAthenaArray();
+    cvf[X2DIR].DeleteAthenaArray();
+    cvf[X3DIR].DeleteAthenaArray();
+    cx1_0.DeleteAthenaArray();
+    cx2_0.DeleteAthenaArray();
+    cx3_0.DeleteAthenaArray();
+    cx1_1.DeleteAthenaArray();
+    cx2_1.DeleteAthenaArray();
+    cx3_1.DeleteAthenaArray();
+    cx1_2.DeleteAthenaArray();
+    cx2_2.DeleteAthenaArray();
+    cx3_2.DeleteAthenaArray();
+  }
 }
 
 //----------------------------------------------------------------------------------------
@@ -216,20 +285,39 @@ void Expansion::IntegrateWalls(Real dt){
   AthenaArray<Real> &v3f = vf[X3DIR];
   if (x1Move) {
 #pragma omp simd
-    for (int i=il; i<=iu+1; ++i) {
+    for (int i=il; i<=iu+1; ++i) 
       x1_0(i) += dt*v1f(i);
-    }
   }
   if (x2Move) {
 #pragma omp simd
-    for (int j=jl; j<=ju+1; ++j) {
+    for (int j=jl; j<=ju+1; ++j) 
       x2_0(j) += dt*v2f(j);
-    }
   }
   if (x3Move) {
 #pragma omp simd
-    for (int k=kl; k<=ku+1; ++k) {
+    for (int k=kl; k<=ku+1; ++k) 
       x3_0(k) += dt*v3f(k);
+  }
+
+  // for multilevel
+  if (pmy_block->pmy_mesh->multilevel) {
+    AthenaArray<Real> &cv1f = cvf[X1DIR];
+    AthenaArray<Real> &cv2f = cvf[X2DIR];
+    AthenaArray<Real> &cv3f = cvf[X3DIR];
+    if (x1Move) {
+#pragma omp simd
+      for (int i=cil; i<=ciu+1; ++i) 
+        cx1_0(i) += dt*cv1f(i);
+    }
+    if (x2Move) {
+#pragma omp simd
+      for (int j=cjl; j<=cju+1; ++j) 
+        cx2_0(j) += dt*cv2f(j);
+    }
+    if (x3Move) {
+#pragma omp simd
+      for (int k=ckl; k<=cku+1; ++k) 
+        cx3_0(k) += dt*cv3f(k);
     }
   }
 
@@ -329,7 +417,6 @@ void Expansion::ExpansionSourceTerms(const Real dt, const AthenaArray<Real> *flu
 void Expansion::RescaleField(const Real dt, FaceField &b_out) {
 
   MeshBlock *pmb=pmy_block;
-  Mesh *pmesh = pmb->pmy_mesh;
 
   AthenaArray<Real> areaold;
   areaold.InitWithShallowCopy(face_area_old_);
@@ -513,6 +600,25 @@ void Expansion::UpdateVelData(MeshBlock *pmb ,Real time, Real dt){
         }
       }
     }
+    // multilevel needs coarse grid
+    if (pmb->pmy_mesh->multilevel) {
+      AthenaArray<Real> &cv1f = cvf[X1DIR];
+      AthenaArray<Real> &cv2f = cvf[X2DIR];
+      AthenaArray<Real> &cv3f = cvf[X3DIR];
+      if (x3Move) {
+        for (int k = ckl; k<=cku+1;++k) 
+          cv3f(k) = pmb->pmy_mesh->GridDiffEq_(pmb->pmr->pcoarsec->x3f(k),k,pmb->pmy_mesh->time,dt,3,pmb->pmy_mesh->GridData);
+      }
+      if (x2Move) {
+        for (int j = cjl;j<=cju+1;++j)
+          cv2f(j) = pmb->pmy_mesh->GridDiffEq_(pmb->pmr->pcoarsec->x2f(j),j,pmb->pmy_mesh->time,dt,2,pmb->pmy_mesh->GridData);
+      }
+      if (x1Move) {
+        for (int i = cil;i<=ciu+1;++i) {
+          cv1f(i) = pmb->pmy_mesh->GridDiffEq_(pmb->pmr->pcoarsec->x1f(i),i,pmb->pmy_mesh->time,dt,1,pmb->pmy_mesh->GridData);
+        }
+      }
+    }
   }
 
   return;
@@ -526,7 +632,7 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
   //x1
   if (x1Move) {
 #pragma omp simd
-    for (int i=il; i<=iu+1; ++i){
+    for (int i=il; i<=iu+1; ++i) {
       pmb->pcoord->x1f(i) = x1_0(i);
     }
 #pragma omp simd
@@ -537,7 +643,7 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
   //x2
   if (x2Move){
 #pragma omp simd
-    for (int j=jl; j<=ju+1; ++j){
+    for (int j=jl; j<=ju+1; ++j) {
       pmb->pcoord->x2f(j) = x2_0(j);
     }
 #pragma omp simd
@@ -548,12 +654,50 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
   //x3
   if (x3Move){
 #pragma omp simd
-    for (int k=kl; k<=ku+1; ++k){
+    for (int k=kl; k<=ku+1; ++k) {
       pmb->pcoord->x3f(k) = x3_0(k);
     }
 #pragma omp simd
     for (int k=kl; k<=ku; ++k) {
       pmb->pcoord->dx3f(k) = pmb->pcoord->x3f(k+1)- pmb->pcoord->x3f(k);
+    }
+  }
+
+  // coarse coordinate object must be updated also
+  // Problem: x1_0 is defined on fine grid, not on coarse grid. Needs to be addressed.
+  if (pmb->pmy_mesh->multilevel) {
+    if (x1Move) {
+      AthenaArray<Real> &cx1f = pmb->pmr->pcoarsec->x1f;
+      AthenaArray<Real> &cdx1f= pmb->pmr->pcoarsec->dx1f;
+#pragma omp simd
+      for (int i=cil; i<=ciu+1; ++i) {
+        cx1f(i) = cx1_0(i);
+      }
+#pragma omp simd
+      for (int i=cil; i<=ciu; ++i) 
+        cdx1f(i) = cx1f(i+1)-cx1f(i);
+    }
+    //x2
+    if (x2Move) {
+      AthenaArray<Real> &cx2f = pmb->pmr->pcoarsec->x2f;
+      AthenaArray<Real> &cdx2f= pmb->pmr->pcoarsec->dx2f;
+#pragma omp simd
+      for (int j=cjl; j<=cju+1; ++j) 
+        cx2f(j) = cx2_0(j);
+#pragma omp simd
+      for (int j=cjl; j<=cju; ++j) 
+        cdx2f(j) = cx2f(j+1)-cx2f(j);
+    }
+    //x3
+    if (x3Move) {
+      AthenaArray<Real> &cx3f = pmb->pmr->pcoarsec->x3f;
+      AthenaArray<Real> &cdx3f= pmb->pmr->pcoarsec->dx3f;
+#pragma omp simd
+      for (int k=ckl; k<=cku+1; ++k) 
+        cx3f(k) = cx3_0(k);
+#pragma omp simd
+      for (int k=ckl; k<=cku; ++k) 
+        cdx3f(k) = cx3f(k+1)-cx3f(k);
     }
   }
 
@@ -777,6 +921,103 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
         }
       }
     }
+    // need to update the coarse coordinate system
+    if (pmb->pmy_mesh->multilevel==true) {
+      AthenaArray<Real> &cx1f = pmb->pmr->pcoarsec->x1f;
+      AthenaArray<Real> &cx1v = pmb->pmr->pcoarsec->x1v;
+      AthenaArray<Real> &cdx1f= pmb->pmr->pcoarsec->dx1f;
+      AthenaArray<Real> &cdx1v= pmb->pmr->pcoarsec->dx1v;
+#pragma omp simd
+      for (int i=cil; i<=ciu; ++i) {
+        cx1v(i) = 0.5*(cx1f(i+1) + cx1f(i));
+      }
+      if (pmb->block_size.x1rat != 1.0) {
+#pragma omp simd
+        for (int i=cil; i<=ciu-1; ++i) {
+          cdx1v(i) = cx1v(i+1) - cx1v(i);
+        }
+      } else {
+#pragma omp simd
+        for (int i=cil; i<=ciu-1; ++i) {
+          // dx1v = dx1f c nstant for uniform mesh; may disagree with x1v(i+1) - x1v(i)
+          cdx1v(i) = cdx1f(i);
+        }
+      }
+      // x2-direction: x2v = dy/2
+      AthenaArray<Real> &cx2f = pmb->pmr->pcoarsec->x2f;
+      AthenaArray<Real> &cx2v = pmb->pmr->pcoarsec->x2v;
+      AthenaArray<Real> &cdx2f= pmb->pmr->pcoarsec->dx2f;
+      AthenaArray<Real> &cdx2v= pmb->pmr->pcoarsec->dx2v;
+      if (pmb->block_size.nx2 == 1) {
+        cx2v(cjl)  = 0.5*(cx2f(cjl+1) + cx2f(cjl));
+        cdx2v(cjl) = cdx2f(cjl);
+      } else {
+#pragma omp simd
+        for (int j=cjl; j<=cju; ++j) {
+          cx2v(j) = 0.5*(cx2f(j+1) + cx2f(j));
+        }
+        if (pmb->block_size.x2rat != 1.0) {
+#pragma omp simd 
+          for (int j=cjl; j<=cju-1; ++j) {
+            cdx2v(j) = cx2v(j+1) - cx2v(j);
+          }
+        } else {
+#pragma omp simd 
+          for (int j=cjl; j<=cju-1; ++j) {
+            // dx2v = dx2f constant for uniform mesh; may disagree with x2v(j+1) - x2v(j)
+            cdx2v(j) = cdx2f(j);
+          }
+        }
+      }
+      // x3-direction: x3v = dz/2
+      AthenaArray<Real> &cx3f = pmb->pmr->pcoarsec->x3f;
+      AthenaArray<Real> &cx3v = pmb->pmr->pcoarsec->x3v;
+      AthenaArray<Real> &cdx3f= pmb->pmr->pcoarsec->dx3f;
+      AthenaArray<Real> &cdx3v= pmb->pmr->pcoarsec->dx3v;
+      if (pmb->block_size.nx3 == 1) {
+        cx3v(ckl)  = 0.5*(cx3f(ckl+1) + cx3f(ckl));
+        cdx3v(ckl) = cdx3f(ckl);
+      } else {
+#pragma omp simd
+        for (int k=ckl; k<=cku; ++k) {
+          cx3v(k) = 0.5*(cx3f(k+1) + cx3f(k));
+        }
+        if (pmb->block_size.x3rat != 1.0) {
+#pragma omp simd           
+          for (int k=ckl; k<=cku-1; ++k) {
+            cdx3v(k) = cx3v(k+1) - cx3v(k);
+          }
+        } else {
+#pragma omp simd 
+          for (int k=ckl; k<=cku-1; ++k) {
+            // dx3v = dx3f constant for uniform mesh; may disagree with x3v(j+1) - x3v(j)
+            cdx3v(k) = cdx3f(k);
+          }
+        }
+      }
+      if (MAGNETIC_FIELDS_ENABLED) {
+#pragma omp simd
+        for (int i=cil; i<=ciu; ++i) {
+          pmb->pmr->pcoarsec->x1s2(i) = pmb->pmr->pcoarsec->x1s3(i) = cx1v(i);
+        }
+        if (pmb->block_size.nx2 == 1) {
+          pmb->pmr->pcoarsec->x2s1(jl) = pmb->pmr->pcoarsec->x2s3(jl) = cx2v(jl);
+        } else {
+#pragma omp simd 
+          for (int j=cjl; j<=cju; ++j) {
+            pmb->pmr->pcoarsec->x2s1(j) = pmb->pmr->pcoarsec->x2s3(j) = cx2v(j);
+          }
+        }
+        if (pmb->block_size.nx3 == 1) {
+          pmb->pmr->pcoarsec->x3s1(kl) = pmb->pmr->pcoarsec->x3s2(kl) = cx3v(kl);
+        } else {
+#pragma omp simd 
+          for (int k=ckl; k<=cku; ++k) {
+            pmb->pmr->pcoarsec->x3s1(k) = pmb->pmr->pcoarsec->x3s2(k) = cx3v(k);
+          }
+        }
+      }
+    }
 
     //Reset Reconstruction coefficients.
 
@@ -898,6 +1139,35 @@ void Expansion::GridEdit(MeshBlock *pmb,bool lastStage){
       for (int i=il; i<=iu; ++i) {
         pmb->pcoord->x1s2(i) = pmb->pcoord->x1s3(i) = (2.0/3.0)*(pow(pmb->pcoord->x1f(i+1),3) - pow(pmb->pcoord->x1f(i),3))
                             /(SQR(pmb->pcoord->x1f(i+1)) - SQR(pmb->pcoord->x1f(i)));
+      }
+    }
+
+    if (pmb->pmy_mesh->multilevel) {
+#pragma omp simd
+      for (int i=cil; i<=ciu; ++i) {
+        pmb->pmr->pcoarsec->x1v(i) = 0.75*(pow(pmb->pmr->pcoarsec->x1f(i+1),4) - pow(pmb->pmr->pcoarsec->x1f(i),4))
+                                         /(pow(pmb->pmr->pcoarsec->x1f(i+1),3) - pow(pmb->pmr->pcoarsec->x1f(i),3));
+      }
+#pragma omp simd
+      for (int i=cil; i<=ciu-1; ++i) {
+        pmb->pmr->pcoarsec->dx1v(i) = pmb->pmr->pcoarsec->x1v(i+1) - pmb->pmr->pcoarsec->x1v(i);
+      }
+
+      //Geometry Coefficients
+#pragma omp simd
+      for (int i=cil; i<=ciu; ++i) {
+        pmb->pmr->pcoarsec->h2v(i) = pmb->pmr->pcoarsec->x1v(i);
+        pmb->pmr->pcoarsec->h2f(i) = pmb->pmr->pcoarsec->x1f(i);
+        pmb->pmr->pcoarsec->h31v(i) = pmb->pmr->pcoarsec->x1v(i);
+        pmb->pmr->pcoarsec->h31f(i) = pmb->pmr->pcoarsec->x1f(i);
+      }
+      if (MAGNETIC_FIELDS_ENABLED) {
+#pragma omp simd
+        for (int i=cil; i<=ciu; ++i) {
+          pmb->pmr->pcoarsec->x1s2(i) = pmb->pmr->pcoarsec->x1s3(i) = 
+                     (2.0/3.0)*(pow(pmb->pmr->pcoarsec->x1f(i+1),3) - pow(pmb->pmr->pcoarsec->x1f(i),3))
+                              /(SQR(pmb->pmr->pcoarsec->x1f(i+1)) - SQR(pmb->pmr->pcoarsec->x1f(i)));
+        }
       }
     }
 

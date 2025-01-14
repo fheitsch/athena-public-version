@@ -88,10 +88,10 @@ MeshRefinement::MeshRefinement(MeshBlock *pmb, ParameterInput *pin) {
     coarse_b_.x3f.NewAthenaArray(ncc3+1,ncc2,ncc1);
     coarse_bcc_.NewAthenaArray(3,ncc3,ncc2,ncc1);
   }
-	if (CLESS_ENABLED) {
-		coarse_conscl_.NewAthenaArray(NCLESS,ncc3,ncc2,ncc1);
-		coarse_primcl_.NewAthenaArray(NCLESS,ncc3,ncc2,ncc1); 
-	}
+  if (CLESS_ENABLED) {
+    coarse_conscl_.NewAthenaArray(NCLESS,ncc3,ncc2,ncc1);
+    coarse_primcl_.NewAthenaArray(NCLESS,ncc3,ncc2,ncc1); 
+  }
 }
 
 
@@ -128,10 +128,10 @@ MeshRefinement::~MeshRefinement() {
     coarse_b_.x3f.DeleteAthenaArray();
     coarse_bcc_.DeleteAthenaArray();
   }
-	if (CLESS_ENABLED) {
-	  coarse_conscl_.DeleteAthenaArray();
-	  coarse_primcl_.DeleteAthenaArray();
-	}
+  if (CLESS_ENABLED) {
+    coarse_conscl_.DeleteAthenaArray();
+    coarse_primcl_.DeleteAthenaArray();
+  }
   delete pcoarsec;
 }
 
@@ -543,6 +543,7 @@ void MeshRefinement::ProlongateCellCenteredValues(const AthenaArray<Real> &coars
         // interpolate on to the finer grid
         fine(n,fk  ,fj  ,fi  ) = ccval - gx1c*dx1fm;
         fine(n,fk  ,fj  ,fi+1) = ccval + gx1c*dx1fp;
+
       }
     }
   }

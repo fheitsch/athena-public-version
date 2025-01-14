@@ -456,6 +456,13 @@ void ATHDF5Output::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
   H5Aclose(attribute);
   code_time = static_cast<H5Real>(time); // output time for xdmf
 
+  // Write current timestep
+  double dt = pm->dt;
+  attribute = H5Acreate2(file, "dt", H5T_NATIVE_REAL, dataspace_scalar, H5P_DEFAULT,
+      H5P_DEFAULT);
+  H5Awrite(attribute, H5T_NATIVE_DOUBLE, &dt);
+  H5Aclose(attribute);
+
   // Write coordinate system
   if (std::strlen(COORDINATE_SYSTEM) > max_name_length) {
     std::stringstream message;

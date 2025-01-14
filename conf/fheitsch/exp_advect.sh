@@ -1,16 +1,14 @@
-
 python3 configure.py\
-                         --prob galpause \
-                         --coord spherical_polar \
+                         --prob exp_advect \
+                         --coord cartesian \
                          --eos adiabatic \
-                         --flux hlle \
+                         --flux hlld \
                          --cxx icc \
                          --cflag="DH5_HAVE_PARALLEL -std=c++11" \
                          --ccmd /nas/longleaf/apps-dogwood/hdf5/1.10.2/openmpi/bin/h5pcc \
-                         --ns 3 \
                          --ng 4 \
+                         -hdf5 \
+                         -debug \
                          -exp \
-                         -mpi \
-                         -hdf5 
-                          
+                         -b
 

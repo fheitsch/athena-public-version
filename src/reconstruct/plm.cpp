@@ -15,6 +15,7 @@
 #include "../coordinates/coordinates.hpp"
 #include "../eos/eos.hpp"
 
+//#define DEBUG
 
 //----------------------------------------------------------------------------------------
 //! \fn Reconstruction::PiecewiseLinearX1()
@@ -118,6 +119,15 @@ void Reconstruction::PiecewiseLinearX1(MeshBlock *pmb,
         }
       }
     }
+#ifdef DEBUG
+    for (int i=il-1; i<=iu; ++i) {
+      if ((pco->x1v(i) >= 7.90024e2) && (pco->x1v(i) <= 8.68102e2)) {
+        fprintf(stdout,"[Reconstruct]: i=%2i x=%13.5e dx=%13.5e d=%11.3e %11.3e %11.3e v=%11.3e %11.3e %11.3e p=%11.3e %11.3e %11.3e dwp=%11.3e\n",
+                i,pco->x1v(i),pco->dx1f(i),wl(IDN,k,j,i+1),wc(IDN,i),wr(IDN,k,j,i),wl(IVX,k,j,i+1),wc(IVX,i),wr(IVX,k,j,i),wl(IPR,k,j,i+1),wc(IPR,i),wr(IPR,k,j,i),dwm(IPR,i));
+      }
+    }
+#endif
+
 
   }}
 

@@ -1372,7 +1372,6 @@ enum TaskStatus TimeIntegratorTaskList::GridMove(MeshBlock *pmb, int stage){
   Hydro *ph=pmb->phydro;
   bool last = (stage == nstages);
   pmb->pex->GridEdit(pmb,last);
-  //pmb->pex->ExpansionSourceTerms(pmb,dt,ph->u);
   return TASK_SUCCESS;
 }
 enum TaskStatus TimeIntegratorTaskList::GridCalculate(MeshBlock *pmb, int stage){
@@ -1386,6 +1385,11 @@ enum TaskStatus TimeIntegratorTaskList::GridCalculate(MeshBlock *pmb, int stage)
     if (px->x1Move) px->WeightedAveX(px->il,px->iu + 1,px->x1_1,px->x1_0,px->x1_2,ave_wghts);
     if (px->x2Move) px->WeightedAveX(px->jl,px->ju + 1,px->x2_1,px->x2_0,px->x2_2,ave_wghts);
     if (px->x3Move) px->WeightedAveX(px->kl,px->ku + 1,px->x3_1,px->x3_0,px->x3_2,ave_wghts);
+    if (pmb->pmy_mesh->multilevel) {
+      if (px->x1Move) px->WeightedAveX(px->cil,px->ciu + 1,px->cx1_1,px->cx1_0,px->cx1_2,ave_wghts);
+      if (px->x2Move) px->WeightedAveX(px->cjl,px->cju + 1,px->cx2_1,px->cx2_0,px->cx2_2,ave_wghts);
+      if (px->x3Move) px->WeightedAveX(px->ckl,px->cku + 1,px->cx3_1,px->cx3_0,px->cx3_2,ave_wghts);
+    }
   }
   px->UpdateVelData(pmb,pmb->pmy_mesh->time,dt);
   //std::cout << "stage=" << stage << std::endl;
@@ -1404,14 +1408,22 @@ enum TaskStatus TimeIntegratorTaskList::GridIntegrate(MeshBlock *pmb, int stage)
     if (px->x1Move) px->WeightedAveX(px->il,px->iu + 1,px->x1_1,px->x1_0,px->x1_2,ave_wghts);
     if (px->x2Move) px->WeightedAveX(px->jl,px->ju + 1,px->x2_1,px->x2_0,px->x2_2,ave_wghts);
     if (px->x3Move) px->WeightedAveX(px->kl,px->ku + 1,px->x3_1,px->x3_0,px->x3_2,ave_wghts);
-
+    if (pmb->pmy_mesh->multilevel) {
+      if (px->x1Move) px->WeightedAveX(px->cil,px->ciu + 1,px->cx1_1,px->cx1_0,px->cx1_2,ave_wghts);
+      if (px->x2Move) px->WeightedAveX(px->cjl,px->cju + 1,px->cx2_1,px->cx2_0,px->cx2_2,ave_wghts);
+      if (px->x3Move) px->WeightedAveX(px->ckl,px->cku + 1,px->cx3_1,px->cx3_0,px->cx3_2,ave_wghts);
+    }
     ave_wghts[0] = stage_wghts[stage-1].gamma_1;
     ave_wghts[1] = stage_wghts[stage-1].gamma_2;
     ave_wghts[2] = stage_wghts[stage-1].gamma_3;
     if (px->x1Move) px->WeightedAveX(px->il,px->iu + 1,px->x1_0,px->x1_1,px->x1_2,ave_wghts);
     if (px->x2Move) px->WeightedAveX(px->jl,px->ju + 1,px->x2_0,px->x2_1,px->x2_2,ave_wghts);
     if (px->x3Move) px->WeightedAveX(px->kl,px->ku + 1,px->x3_0,px->x3_1,px->x3_2,ave_wghts);
-
+    if (pmb->pmy_mesh->multilevel) {
+      if (px->x1Move) px->WeightedAveX(px->cil,px->ciu + 1,px->cx1_0,px->cx1_1,px->cx1_2,ave_wghts);
+      if (px->x2Move) px->WeightedAveX(px->cjl,px->cju + 1,px->cx2_0,px->cx2_1,px->cx2_2,ave_wghts);
+      if (px->x3Move) px->WeightedAveX(px->ckl,px->cku + 1,px->cx3_0,px->cx3_1,px->cx3_2,ave_wghts);
+    }
     px->IntegrateWalls(dt);
   }
   return TASK_SUCCESS;

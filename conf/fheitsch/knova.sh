@@ -1,7 +1,7 @@
 
 python3 configure.py\
-                         --prob galpause \
-                         --coord spherical_polar \
+                         --prob knova \
+                         --coord cartesian \
                          --eos adiabatic \
                          --flux hlle \
                          --cxx icc \
@@ -10,6 +10,7 @@ python3 configure.py\
                          --ns 3 \
                          --ng 4 \
                          -exp \
+                         -de \
                          -mpi \
                          -hdf5 
                           
