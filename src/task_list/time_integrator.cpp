@@ -770,11 +770,6 @@ enum TaskStatus TimeIntegratorTaskList::HydroIntegrate(MeshBlock *pmb, int stage
     ph->WeightedAveU(ph->u,ph->u1,ph->u2,ave_wghts);
     ph->AddFluxDivergenceToAverage(ph->w,pf->bcc,stage_wghts[stage-1].beta,ph->u);
 
-    //if (EXPANDING_ENABLED) {
-    //  Real dt = (stage_wghts[stage-1].beta)*(pmb->pmy_mesh->dt);
-    //  pmb->pex->AddWallFluxDivergence(dt, ph->w, ph->u);
-    //}
-    
     return TASK_NEXT;
   }
 

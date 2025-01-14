@@ -55,6 +55,7 @@ int ncycold=-1;
 int ivexp;
 Real vtrack0, boost,x1rat;
 Real dtramp0, dtramp1, tramp0;
+Real dlnrdlnt0=0.0, dlnrdlnt1=0.0;
 AthenaArray<Real> ttrack,rtrack;
 
 //Cooling function
@@ -67,7 +68,7 @@ Real RampTimeStep(MeshBlock *pmb);
 
 //Global Variables for OuterX1
 int ibtype;
-Real ambdens, ambprss, time_free;
+Real ambdens, ambprss, time_free=HUGE_NUMBER;
 Real b0, bx0, by0, bz0, angle;
 // The expanding grid requires user-defined boundary functions only for axes
 // along which expansion is possible. 
@@ -294,16 +295,29 @@ void UpdateGridDataKnova(Mesh *pm) {
       rtrack(0) = totradius;
     }
   }
-  vtrack = 0.0;
+  vtrack   = 0.0;
   for (int m=1; m<ntr; ++m) { // calculate front velocity as average over tracking elements
     Real vt = (rtrack(m-1)-rtrack(m))/(ttrack(m-1)-ttrack(m)) * (pm->GridData(3)/totradius);
     vtrack += vt;
   }
   if (ntr > 0) vtrack /= ntr;
 
+  // global variables to control switch-off
+  dlnrdlnt0 = dlnrdlnt1;
+  dlnrdlnt1 = 0.0;
+  for (int m=2; m< ntr; ++m) {
+    Real dlrdlt = (std::log(rtrack(m))-std::log(rtrack(m-1)))
+                 /(std::log(ttrack(m))-std::log(ttrack(m-1)));
+    dlnrdlnt1 += dlrdlt; // store the dln(r)/dln(t) derivative
+  }
+  if (ntr > 2) dlnrdlnt1 /= (ntr-2);
+
+  // Once dlnrdlnt drops for the first time, we need to switch off resetting.
+  if (dlnrdlnt1 < dlnrdlnt0) time_free = pm->time;
+
   vtrack = (vtrack <= 0.0) ? 0.0 : vtrack; // enforce expansion
   if (Globals::my_rank == 0)
-    fprintf(stdout,"[UpdateGrid] vtrack=%13.5e rtrack=%13.5e xmax =%13.5e\n", vtrack,totradius,pm->GridData(3));
+    fprintf(stdout,"[UpdateGrid] vtrack=%13.5e rtrack=%13.5e xmax =%13.5e dlrndlnt=%13.5e time_free=%13.5e\n", vtrack,totradius,pm->GridData(3),dlnrdlnt1,time_free);
 
   vtrack *= boost;
 
@@ -1025,7 +1039,6 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   Real e0      = p0/gm1; //seems to be ambient initial energy density
   ambdens      = d0; // global variables for boundaries
   ambprss      = p0;
-  time_free    = 3.0e-4/v0; // 1e-8 for v0=3e4, 1e-9 for v0=3e5
 
   // setup uniform ambient medium with spherical over-pressured region
   for (int k=ks; k<=ke; k++) {
